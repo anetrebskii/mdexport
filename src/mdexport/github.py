@@ -1,9 +1,19 @@
 """GitHub exporter - issues, PRs, wiki."""
 
 from pathlib import Path
+from datetime import date, datetime, timezone
 from github import Github, Auth
+from github.GithubRetry import GithubRetry
 import subprocess
 import click
+
+
+def _synced_today(path: Path) -> bool:
+    """Check if a file was modified today."""
+    if not path.exists():
+        return False
+    mtime = date.fromtimestamp(path.stat().st_mtime)
+    return mtime == date.today()
 
 
 def _format_comments(comments) -> str:
@@ -49,12 +59,20 @@ def _format_events(events) -> str:
     return "\n".join(lines)
 
 
-def _export_issues(repo, out: Path):
+def _export_issues(repo, out: Path, since: datetime | None = None):
     out.mkdir(parents=True, exist_ok=True)
-    issues = repo.get_issues(state="all", sort="created", direction="desc")
+    kwargs = {"state": "all", "sort": "updated", "direction": "desc"}
+    if since:
+        kwargs["since"] = since
+    issues = repo.get_issues(**kwargs)
     count = 0
+    skipped = 0
     for issue in issues:
         if issue.pull_request:
+            continue
+        fname = f"{issue.number:04d}-{_slugify(issue.title)}.md"
+        if _synced_today(out / fname):
+            skipped += 1
             continue
         labels = ", ".join(l.name for l in issue.labels)
         created = issue.created_at.strftime("%Y-%m-%d")
@@ -80,19 +98,25 @@ def _export_issues(repo, out: Path):
 
 {_format_comments(issue.get_comments())}
 """
-        fname = f"{issue.number:04d}-{_slugify(issue.title)}.md"
         (out / fname).write_text(md)
         count += 1
         if count % 25 == 0:
             click.echo(f"  Exported {count} issues...")
-    click.echo(f"  Exported {count} issues total")
+    click.echo(f"  Exported {count} issues total" + (f" (skipped {skipped} existing)" if skipped else ""))
 
 
-def _export_prs(repo, out: Path):
+def _export_prs(repo, out: Path, since: datetime | None = None):
     out.mkdir(parents=True, exist_ok=True)
-    pulls = repo.get_pulls(state="all", sort="created", direction="desc")
+    pulls = repo.get_pulls(state="all", sort="updated", direction="desc")
     count = 0
+    skipped = 0
     for pr in pulls:
+        if since and pr.updated_at and pr.updated_at < since:
+            break
+        fname = f"{pr.number:04d}-{_slugify(pr.title)}.md"
+        if _synced_today(out / fname):
+            skipped += 1
+            continue
         labels = ", ".join(l.name for l in pr.labels)
         created = pr.created_at.strftime("%Y-%m-%d")
         merged = pr.merged_at.strftime("%Y-%m-%d") if pr.merged_at else "not merged"
@@ -119,12 +143,11 @@ def _export_prs(repo, out: Path):
 
 {_format_comments(pr.get_issue_comments())}
 """
-        fname = f"{pr.number:04d}-{_slugify(pr.title)}.md"
         (out / fname).write_text(md)
         count += 1
         if count % 25 == 0:
             click.echo(f"  Exported {count} PRs...")
-    click.echo(f"  Exported {count} PRs total")
+    click.echo(f"  Exported {count} PRs total" + (f" (skipped {skipped} existing)" if skipped else ""))
 
 
 def _export_wiki(repo_full_name: str, out: Path):
@@ -154,19 +177,25 @@ def _slugify(text: str) -> str:
     return "".join(c for c in slug if c.isalnum() or c == "-")[:60]
 
 
-def export_github(repo_name: str, token: str, out: Path, *, issues=True, prs=True, wiki=True):
+def export_github(repo_name: str, token: str, out: Path, *, issues=True, prs=True, wiki=True, since: str | None = None):
     click.echo(f"Connecting to GitHub repo: {repo_name}")
-    g = Github(auth=Auth.Token(token))
+    retry = GithubRetry(total=5, backoff_factor=1.0)
+    g = Github(auth=Auth.Token(token), retry=retry)
     repo = g.get_repo(repo_name)
     click.echo(f"Repo: {repo.full_name} ({repo.stargazers_count} stars)")
 
+    since_dt = None
+    if since:
+        since_dt = datetime.fromisoformat(since)
+        click.echo(f"Incremental sync since {since_dt.strftime('%Y-%m-%d %H:%M')}")
+
     if issues:
         click.echo("Exporting issues...")
-        _export_issues(repo, out / "issues")
+        _export_issues(repo, out / "issues", since=since_dt)
 
     if prs:
         click.echo("Exporting pull requests...")
-        _export_prs(repo, out / "prs")
+        _export_prs(repo, out / "prs", since=since_dt)
 
     if wiki:
         click.echo("Exporting wiki...")

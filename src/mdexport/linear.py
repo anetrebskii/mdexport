@@ -1,24 +1,51 @@
 """Linear exporter - issues with comments and history."""
 
 from pathlib import Path
+from datetime import date
+import time
 import httpx
 import click
 
+
+def _synced_today(path: Path) -> bool:
+    """Check if a file was modified today."""
+    if not path.exists():
+        return False
+    mtime = date.fromtimestamp(path.stat().st_mtime)
+    return mtime == date.today()
+
 API_URL = "https://api.linear.app/graphql"
+MAX_RETRIES = 5
 
 
 def _query(token: str, query: str, variables: dict | None = None) -> dict:
-    resp = httpx.post(
-        API_URL,
-        json={"query": query, "variables": variables or {}},
-        headers={"Authorization": token, "Content-Type": "application/json"},
-        timeout=30,
-    )
-    resp.raise_for_status()
-    data = resp.json()
-    if "errors" in data:
-        raise click.ClickException(f"Linear API error: {data['errors']}")
-    return data["data"]
+    for attempt in range(MAX_RETRIES):
+        try:
+            resp = httpx.post(
+                API_URL,
+                json={"query": query, "variables": variables or {}},
+                headers={"Authorization": token, "Content-Type": "application/json"},
+                timeout=30,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            if "errors" in data:
+                raise click.ClickException(f"Linear API error: {data['errors']}")
+            return data["data"]
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code in (429, 500, 502, 503) and attempt < MAX_RETRIES - 1:
+                wait = 2 ** attempt
+                click.echo(f"    Retrying in {wait}s (HTTP {e.response.status_code})...")
+                time.sleep(wait)
+                continue
+            raise
+        except httpx.TransportError:
+            if attempt < MAX_RETRIES - 1:
+                wait = 2 ** attempt
+                click.echo(f"    Retrying in {wait}s (connection error)...")
+                time.sleep(wait)
+                continue
+            raise
 
 
 def _get_teams(token: str) -> list[dict]:
@@ -28,18 +55,28 @@ def _get_teams(token: str) -> list[dict]:
     return data["teams"]["nodes"]
 
 
-def _get_issues(token: str, team_id: str) -> list[dict]:
+def _get_issues(token: str, team_id: str, since: str | None = None) -> list[dict]:
     issues = []
     after = None
     while True:
-        variables = {"teamId": team_id, "after": after}
-        data = _query(token, """
+        variables = {"teamId": team_id, "after": after, "since": since}
+        if since:
+            query_str = """
+            query($teamId: String!, $after: String, $since: DateTime!) {
+                issues(
+                    filter: { team: { id: { eq: $teamId } }, updatedAt: { gte: $since } }
+                    first: 50
+                    after: $after
+                    orderBy: updatedAt"""
+        else:
+            query_str = """
             query($teamId: String!, $after: String) {
                 issues(
                     filter: { team: { id: { eq: $teamId } } }
                     first: 50
                     after: $after
-                    orderBy: createdAt
+                    orderBy: createdAt"""
+        data = _query(token, query_str + """
                 ) {
                     nodes {
                         id identifier title description state { name }
@@ -130,7 +167,7 @@ def _slugify(text: str) -> str:
     return "".join(c for c in slug if c.isalnum() or c == "-")[:60]
 
 
-def export_linear(token: str, out: Path, *, teams: list[str] | None = None):
+def export_linear(token: str, out: Path, *, teams: list[str] | None = None, since: str | None = None):
     click.echo("Fetching Linear teams...")
     all_teams = _get_teams(token)
 
@@ -140,6 +177,9 @@ def export_linear(token: str, out: Path, *, teams: list[str] | None = None):
     if not all_teams:
         raise click.ClickException("No matching teams found")
 
+    if since:
+        click.echo(f"Incremental sync since {since[:19].replace('T', ' ')}")
+
     click.echo(f"Exporting {len(all_teams)} team(s): {', '.join(t['key'] for t in all_teams)}")
 
     for team in all_teams:
@@ -147,10 +187,15 @@ def export_linear(token: str, out: Path, *, teams: list[str] | None = None):
         team_dir.mkdir(parents=True, exist_ok=True)
 
         click.echo(f"\nTeam: {team['name']} ({team['key']})")
-        issues = _get_issues(token, team["id"])
+        issues = _get_issues(token, team["id"], since=since)
         click.echo(f"  Found {len(issues)} issues")
 
+        skipped = 0
         for i, issue in enumerate(issues):
+            fname = f"{issue['identifier']}-{_slugify(issue['title'])}.md"
+            if _synced_today(team_dir / fname):
+                skipped += 1
+                continue
             comments = _get_comments(token, issue["id"])
             history = _get_history(token, issue["id"])
 
@@ -193,12 +238,11 @@ def export_linear(token: str, out: Path, *, teams: list[str] | None = None):
 
 {comments_md or '*(no comments)*'}
 """
-            fname = f"{issue['identifier']}-{_slugify(issue['title'])}.md"
             (team_dir / fname).write_text(md)
 
             if (i + 1) % 25 == 0:
                 click.echo(f"  Exported {i + 1} issues...")
 
-        click.echo(f"  Exported {len(issues)} issues total")
+        click.echo(f"  Exported {len(issues) - skipped} issues total" + (f" (skipped {skipped} existing)" if skipped else ""))
 
     click.echo(f"\nDone! Output: {out}")

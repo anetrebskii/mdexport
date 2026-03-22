@@ -1,14 +1,11 @@
 import click
-import os
 from pathlib import Path
-from dotenv import load_dotenv
 
 
 @click.group()
 @click.pass_context
 def cli(ctx):
     """Export GitHub, Slack, and Linear data to local Markdown files."""
-    load_dotenv()
     ctx.ensure_object(dict)
 
 
@@ -23,18 +20,13 @@ def add():
 @click.argument("repo")
 @click.option("--name", "-n", help="Custom name (default: derived from repo)")
 @click.option("--output", "-o", type=click.Path(), required=True, help="Output directory")
-@click.option("--token", envvar="GITHUB_TOKEN", help="GitHub token (or set GITHUB_TOKEN)")
+@click.option("--token", envvar="GITHUB_TOKEN", required=True, help="GitHub token")
 @click.option("--issues/--no-issues", default=True)
 @click.option("--prs/--no-prs", default=True)
 @click.option("--wiki/--no-wiki", default=True)
 def add_github(repo, name, output, token, issues, prs, wiki):
     """Add a GitHub repo export. REPO is owner/name."""
     from mdexport.registry import register
-
-    if not token:
-        token = os.environ.get("GITHUB_TOKEN")
-    if not token:
-        raise click.ClickException("GitHub token required. Set GITHUB_TOKEN or pass --token.")
 
     name = name or repo.replace("/", "-")
     out = str(Path(output).resolve())
@@ -43,7 +35,7 @@ def add_github(repo, name, output, token, issues, prs, wiki):
         "type": "github",
         "repo": repo,
         "output": out,
-        "token_env": "GITHUB_TOKEN",
+        "token": token,
         "issues": issues,
         "prs": prs,
         "wiki": wiki,
@@ -54,24 +46,19 @@ def add_github(repo, name, output, token, issues, prs, wiki):
 @add.command("slack")
 @click.option("--name", "-n", required=True, help="Name for this export")
 @click.option("--output", "-o", type=click.Path(), required=True, help="Output directory")
-@click.option("--token", envvar="SLACK_TOKEN", help="Slack user token xoxp-... (or set SLACK_TOKEN)")
+@click.option("--token", envvar="SLACK_TOKEN", required=True, help="Slack user token (xoxp-...)")
 @click.option("--channel", "-c", multiple=True, help="Channels (default: all public)")
 @click.option("--days", type=int, default=90, help="Days of history (default: 90)")
 def add_slack(name, output, token, channel, days):
     """Add a Slack workspace export."""
     from mdexport.registry import register
 
-    if not token:
-        token = os.environ.get("SLACK_TOKEN")
-    if not token:
-        raise click.ClickException("Slack user token required. Set SLACK_TOKEN or pass --token.")
-
     out = str(Path(output).resolve())
 
     register(name, {
         "type": "slack",
         "output": out,
-        "token_env": "SLACK_TOKEN",
+        "token": token,
         "channels": list(channel) if channel else None,
         "days": days,
     })
@@ -81,23 +68,18 @@ def add_slack(name, output, token, channel, days):
 @add.command("linear")
 @click.option("--name", "-n", required=True, help="Name for this export")
 @click.option("--output", "-o", type=click.Path(), required=True, help="Output directory")
-@click.option("--token", envvar="LINEAR_TOKEN", help="Linear API key (or set LINEAR_TOKEN)")
+@click.option("--token", envvar="LINEAR_TOKEN", required=True, help="Linear API key")
 @click.option("--team", "-t", multiple=True, help="Team keys (default: all)")
 def add_linear(name, output, token, team):
     """Add a Linear export."""
     from mdexport.registry import register
-
-    if not token:
-        token = os.environ.get("LINEAR_TOKEN")
-    if not token:
-        raise click.ClickException("Linear API key required. Set LINEAR_TOKEN or pass --token.")
 
     out = str(Path(output).resolve())
 
     register(name, {
         "type": "linear",
         "output": out,
-        "token_env": "LINEAR_TOKEN",
+        "token": token,
         "teams": list(team) if team else None,
     })
     click.echo(f"Added Linear export '{name}' -> {out}")
@@ -140,6 +122,49 @@ def _describe_source(cfg: dict) -> str:
     return ""
 
 
+# --- info ---
+
+@cli.command("info")
+@click.argument("name")
+def info(name):
+    """Show detailed info about a registered export."""
+    from mdexport.registry import get
+
+    cfg = get(name)
+    if not cfg:
+        raise click.ClickException(f"Export '{name}' not found. Run 'mdexport list'.")
+
+    click.echo(f"Name:    {name}")
+    click.echo(f"Type:    {cfg['type']}")
+    click.echo(f"Output:  {cfg['output']}")
+
+    if cfg["type"] == "github":
+        click.echo(f"Repo:    {cfg['repo']}")
+        click.echo(f"Issues:  {'yes' if cfg.get('issues', True) else 'no'}")
+        click.echo(f"PRs:     {'yes' if cfg.get('prs', True) else 'no'}")
+        click.echo(f"Wiki:    {'yes' if cfg.get('wiki', True) else 'no'}")
+    elif cfg["type"] == "slack":
+        channels = cfg.get("channels")
+        click.echo(f"Channels: {', '.join(channels) if channels else 'all public'}")
+        click.echo(f"Days:    {cfg.get('days', 90)}")
+    elif cfg["type"] == "linear":
+        teams = cfg.get("teams")
+        click.echo(f"Teams:   {', '.join(teams) if teams else 'all'}")
+
+    added = cfg.get("added_at", "unknown")
+    if added and added != "unknown":
+        added = added[:19].replace("T", " ")
+    synced = cfg.get("synced_at")
+    if synced:
+        synced = synced[:19].replace("T", " ")
+    else:
+        synced = "never"
+
+    click.echo(f"Added:   {added}")
+    click.echo(f"Synced:  {synced}")
+    click.echo(f"Token:   {'configured' if cfg.get('token') else 'missing'}")
+
+
 # --- remove ---
 
 @cli.command("remove")
@@ -166,12 +191,19 @@ def sync(name):
         cfg = get(name)
         if not cfg:
             raise click.ClickException(f"Export '{name}' not found. Run 'mdexport list'.")
-        _sync_one(name, cfg)
-        update_synced(name)
+        try:
+            _sync_one(name, cfg)
+            update_synced(name)
+        except Exception as e:
+            click.echo(f"\nError: {e}", err=True)
+            click.echo(f"\nTo resume, run:  mdexport sync {name}", err=True)
+            click.echo("Already exported items will be skipped.", err=True)
+            raise SystemExit(1)
     else:
         exports = get_all()
         if not exports:
             raise click.ClickException("No exports registered. Use 'mdexport add' to add one.")
+        failed = []
         for n, cfg in exports.items():
             click.echo(f"\n{'=' * 60}")
             click.echo(f"Syncing: {n}")
@@ -181,28 +213,40 @@ def sync(name):
                 update_synced(n)
             except Exception as e:
                 click.echo(f"Error syncing '{n}': {e}")
+                failed.append(n)
+        if failed:
+            click.echo(f"\nFailed exports: {', '.join(failed)}", err=True)
+            click.echo("To resume, run:", err=True)
+            for n in failed:
+                click.echo(f"  mdexport sync {n}", err=True)
+            click.echo("Already exported items will be skipped.", err=True)
+            raise SystemExit(1)
+
+
+def _resolve_token(cfg: dict) -> str:
+    token = cfg.get("token")
+    if not token:
+        raise click.ClickException(f"No token stored for '{cfg['type']}' export. Re-add with --token.")
+    return token
 
 
 def _sync_one(name: str, cfg: dict):
     t = cfg["type"]
     out = Path(cfg["output"])
+    token = _resolve_token(cfg)
+    since = cfg.get("synced_at")
 
     if t == "github":
-        token = os.environ.get(cfg.get("token_env", "GITHUB_TOKEN"))
-        if not token:
-            raise click.ClickException(f"Set {cfg.get('token_env', 'GITHUB_TOKEN')} env var")
         from mdexport.github import export_github
         export_github(
             cfg["repo"], token, out,
             issues=cfg.get("issues", True),
             prs=cfg.get("prs", True),
             wiki=cfg.get("wiki", True),
+            since=since,
         )
 
     elif t == "slack":
-        token = os.environ.get(cfg.get("token_env", "SLACK_TOKEN"))
-        if not token:
-            raise click.ClickException(f"Set {cfg.get('token_env', 'SLACK_TOKEN')} env var")
         from mdexport.slack import export_slack
         export_slack(
             token, out,
@@ -211,13 +255,11 @@ def _sync_one(name: str, cfg: dict):
         )
 
     elif t == "linear":
-        token = os.environ.get(cfg.get("token_env", "LINEAR_TOKEN"))
-        if not token:
-            raise click.ClickException(f"Set {cfg.get('token_env', 'LINEAR_TOKEN')} env var")
         from mdexport.linear import export_linear
         export_linear(
             token, out,
             teams=cfg.get("teams"),
+            since=since,
         )
 
     else:

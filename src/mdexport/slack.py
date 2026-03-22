@@ -1,10 +1,19 @@
 """Slack exporter - messages from channels using user token."""
 
 from pathlib import Path
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
+from slack_sdk.http_retry.builtin_handlers import RateLimitErrorRetryHandler, ServerErrorRetryHandler
 import click
+
+
+def _synced_today(path: Path) -> bool:
+    """Check if a file was modified today."""
+    if not path.exists():
+        return False
+    mtime = date.fromtimestamp(path.stat().st_mtime)
+    return mtime == date.today()
 
 
 def _resolve_users(client: WebClient) -> dict:
@@ -58,6 +67,13 @@ def _format_message(msg: dict, users: dict) -> str:
 def _export_channel(client: WebClient, channel: dict, users: dict, out: Path, oldest: float):
     cid = channel["id"]
     name = channel.get("name", cid)
+
+    # Skip if already synced today
+    channel_file = out / name / f"{name}.md"
+    if _synced_today(channel_file):
+        click.echo(f"  #{name} (skipped, synced today)")
+        return
+
     click.echo(f"  #{name}...")
 
     messages = []
@@ -125,6 +141,8 @@ def _export_channel(client: WebClient, channel: dict, users: dict, out: Path, ol
 
 def export_slack(token: str, out: Path, *, channels: list[str] | None = None, days: int = 90):
     client = WebClient(token=token)
+    client.retry_handlers.append(RateLimitErrorRetryHandler(max_retry_count=5))
+    client.retry_handlers.append(ServerErrorRetryHandler(max_retry_count=5))
     out.mkdir(parents=True, exist_ok=True)
 
     click.echo("Resolving users...")
