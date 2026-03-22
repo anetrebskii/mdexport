@@ -1,0 +1,204 @@
+"""Linear exporter - issues with comments and history."""
+
+from pathlib import Path
+import httpx
+import click
+
+API_URL = "https://api.linear.app/graphql"
+
+
+def _query(token: str, query: str, variables: dict | None = None) -> dict:
+    resp = httpx.post(
+        API_URL,
+        json={"query": query, "variables": variables or {}},
+        headers={"Authorization": token, "Content-Type": "application/json"},
+        timeout=30,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    if "errors" in data:
+        raise click.ClickException(f"Linear API error: {data['errors']}")
+    return data["data"]
+
+
+def _get_teams(token: str) -> list[dict]:
+    data = _query(token, """
+        query { teams { nodes { id key name } } }
+    """)
+    return data["teams"]["nodes"]
+
+
+def _get_issues(token: str, team_id: str) -> list[dict]:
+    issues = []
+    after = None
+    while True:
+        variables = {"teamId": team_id, "after": after}
+        data = _query(token, """
+            query($teamId: String!, $after: String) {
+                issues(
+                    filter: { team: { id: { eq: $teamId } } }
+                    first: 50
+                    after: $after
+                    orderBy: createdAt
+                ) {
+                    nodes {
+                        id identifier title description state { name }
+                        priority priorityLabel
+                        assignee { name }
+                        creator { name }
+                        labels { nodes { name } }
+                        createdAt updatedAt
+                        url
+                    }
+                    pageInfo { hasNextPage endCursor }
+                }
+            }
+        """, variables)
+        issues.extend(data["issues"]["nodes"])
+        page = data["issues"]["pageInfo"]
+        if not page["hasNextPage"]:
+            break
+        after = page["endCursor"]
+    return issues
+
+
+def _get_comments(token: str, issue_id: str) -> list[dict]:
+    data = _query(token, """
+        query($issueId: String!) {
+            comments(filter: { issue: { id: { eq: $issueId } } }, orderBy: createdAt) {
+                nodes {
+                    body
+                    user { name }
+                    createdAt
+                }
+            }
+        }
+    """, {"issueId": issue_id})
+    return data["comments"]["nodes"]
+
+
+def _get_history(token: str, issue_id: str) -> list[dict]:
+    data = _query(token, """
+        query($issueId: ID!) {
+            issueHistory(issueId: $issueId) {
+                nodes {
+                    createdAt
+                    actor { name }
+                    fromState { name }
+                    toState { name }
+                    fromAssignee { name }
+                    toAssignee { name }
+                    fromPriority
+                    toPriority
+                    addedLabels { nodes { name } }
+                    removedLabels { nodes { name } }
+                }
+            }
+        }
+    """, {"issueId": issue_id})
+    return data["issueHistory"]["nodes"]
+
+
+def _format_history(history: list[dict]) -> str:
+    lines = []
+    for h in history:
+        date = h["createdAt"][:16].replace("T", " ")
+        actor = h.get("actor", {})
+        actor_name = actor.get("name", "system") if actor else "system"
+        changes = []
+
+        if h.get("fromState") and h.get("toState"):
+            changes.append(f"status: {h['fromState']['name']} -> {h['toState']['name']}")
+        if h.get("fromAssignee") or h.get("toAssignee"):
+            fr = h.get("fromAssignee", {})
+            to = h.get("toAssignee", {})
+            fr_name = fr.get("name", "unassigned") if fr else "unassigned"
+            to_name = to.get("name", "unassigned") if to else "unassigned"
+            changes.append(f"assignee: {fr_name} -> {to_name}")
+        for label in (h.get("addedLabels") or {}).get("nodes", []):
+            changes.append(f"+label `{label['name']}`")
+        for label in (h.get("removedLabels") or {}).get("nodes", []):
+            changes.append(f"-label `{label['name']}`")
+
+        if changes:
+            lines.append(f"- **{date}** {actor_name}: {', '.join(changes)}")
+    return "\n".join(lines) or "*(no history)*"
+
+
+def _slugify(text: str) -> str:
+    slug = text.lower().replace(" ", "-")
+    return "".join(c for c in slug if c.isalnum() or c == "-")[:60]
+
+
+def export_linear(token: str, out: Path, *, teams: list[str] | None = None):
+    click.echo("Fetching Linear teams...")
+    all_teams = _get_teams(token)
+
+    if teams:
+        all_teams = [t for t in all_teams if t["key"] in teams]
+
+    if not all_teams:
+        raise click.ClickException("No matching teams found")
+
+    click.echo(f"Exporting {len(all_teams)} team(s): {', '.join(t['key'] for t in all_teams)}")
+
+    for team in all_teams:
+        team_dir = out / team["key"]
+        team_dir.mkdir(parents=True, exist_ok=True)
+
+        click.echo(f"\nTeam: {team['name']} ({team['key']})")
+        issues = _get_issues(token, team["id"])
+        click.echo(f"  Found {len(issues)} issues")
+
+        for i, issue in enumerate(issues):
+            comments = _get_comments(token, issue["id"])
+            history = _get_history(token, issue["id"])
+
+            labels = ", ".join(l["name"] for l in issue.get("labels", {}).get("nodes", []))
+            assignee = issue.get("assignee", {})
+            assignee_name = assignee.get("name", "unassigned") if assignee else "unassigned"
+            creator = issue.get("creator", {})
+            creator_name = creator.get("name", "unknown") if creator else "unknown"
+            state = issue.get("state", {})
+            state_name = state.get("name", "unknown") if state else "unknown"
+            created = issue["createdAt"][:10]
+            description = issue.get("description") or "*(no description)*"
+
+            comments_md = ""
+            for c in comments:
+                c_date = c["createdAt"][:16].replace("T", " ")
+                c_user = c.get("user", {})
+                c_name = c_user.get("name", "unknown") if c_user else "unknown"
+                comments_md += f"### {c_name} - {c_date}\n\n{c.get('body', '')}\n\n"
+
+            md = f"""# {issue['identifier']} - {issue['title']}
+
+- **State:** {state_name}
+- **Priority:** {issue.get('priorityLabel', 'none')}
+- **Labels:** {labels or 'none'}
+- **Assignee:** {assignee_name}
+- **Creator:** {creator_name}
+- **Created:** {created}
+- **URL:** {issue.get('url', '')}
+
+## Description
+
+{description}
+
+## History
+
+{_format_history(history)}
+
+## Comments
+
+{comments_md or '*(no comments)*'}
+"""
+            fname = f"{issue['identifier']}-{_slugify(issue['title'])}.md"
+            (team_dir / fname).write_text(md)
+
+            if (i + 1) % 25 == 0:
+                click.echo(f"  Exported {i + 1} issues...")
+
+        click.echo(f"  Exported {len(issues)} issues total")
+
+    click.echo(f"\nDone! Output: {out}")

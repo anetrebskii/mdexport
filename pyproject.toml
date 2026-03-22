@@ -1,0 +1,22 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "mdexport"
+version = "0.1.0"
+description = "Export GitHub issues/PRs, Slack messages, and Linear issues to local Markdown files"
+requires-python = ">=3.11"
+dependencies = [
+    "click>=8.1",
+    "PyGithub>=2.1",
+    "slack-sdk>=3.27",
+    "httpx>=0.27",
+    "python-dotenv>=1.0",
+]
+
+[project.scripts]
+mdexport = "mdexport.cli:cli"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mdexport"]
