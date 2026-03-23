@@ -339,7 +339,9 @@ def remove(name):
 
 @cli.command("sync")
 @click.argument("name", required=False)
-def sync(name):
+@click.option("--full", is_flag=True, default=False, help="Full sync, ignore last synced timestamp")
+@click.option("--dry-run", is_flag=True, default=False, help="List files that would be synced without exporting")
+def sync(name, full, dry_run):
     """Sync one or all exports. Run without NAME to sync all."""
     from mdexport.registry import get, get_all, update_synced
 
@@ -347,9 +349,14 @@ def sync(name):
         cfg = get(name)
         if not cfg:
             raise click.ClickException(f"Export '{name}' not found. Run 'mdexport list'.")
+        if full:
+            cfg["synced_at"] = None
+        if dry_run:
+            cfg["_dry_run"] = True
         try:
             _sync_one(name, cfg)
-            update_synced(name)
+            if not dry_run:
+                update_synced(name)
         except Exception as e:
             click.echo(f"\nError: {e}", err=True)
             click.echo(f"\nTo resume, run:  mdexport sync {name}", err=True)
@@ -361,12 +368,17 @@ def sync(name):
             raise click.ClickException("No exports registered. Use 'mdexport add' to add one.")
         failed = []
         for n, cfg in exports.items():
+            if full:
+                cfg["synced_at"] = None
+            if dry_run:
+                cfg["_dry_run"] = True
             click.echo(f"\n{'=' * 60}")
             click.echo(f"Syncing: {n}")
             click.echo(f"{'=' * 60}")
             try:
                 _sync_one(n, cfg)
-                update_synced(n)
+                if not dry_run:
+                    update_synced(n)
             except Exception as e:
                 click.echo(f"Error syncing '{n}': {e}")
                 failed.append(n)

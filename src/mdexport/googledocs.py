@@ -72,8 +72,28 @@ def _slugify(text: str) -> str:
     return "".join(c for c in slug if c.isalnum() or c == "-")[:60]
 
 
+def _list_subfolders(drive, folder_id: str) -> list[str]:
+    """Recursively list all subfolder IDs under a folder."""
+    q = f"'{folder_id}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
+    subfolders = []
+    page_token = None
+    while True:
+        resp = drive.files().list(
+            q=q, fields="nextPageToken, files(id)",
+            pageSize=100, pageToken=page_token,
+            supportsAllDrives=True, includeItemsFromAllDrives=True,
+        ).execute()
+        for f in resp.get("files", []):
+            subfolders.append(f["id"])
+            subfolders.extend(_list_subfolders(drive, f["id"]))
+        page_token = resp.get("nextPageToken")
+        if not page_token:
+            break
+    return subfolders
+
+
 def _list_docs(drive, folder_ids: list[str] | None, since: datetime | None = None) -> list[dict]:
-    """List Google Docs in the given folders (or all accessible docs)."""
+    """List Google Docs in the given folders (recursively) or all accessible docs."""
     docs = []
     query_parts = ["mimeType = 'application/vnd.google-apps.document'", "trashed = false"]
     if since:
@@ -81,7 +101,13 @@ def _list_docs(drive, folder_ids: list[str] | None, since: datetime | None = Non
         query_parts.append(f"modifiedTime > '{ts}'")
 
     if folder_ids:
-        for folder_id in folder_ids:
+        # Expand folder_ids to include all subfolders
+        all_folder_ids = list(folder_ids)
+        for fid in folder_ids:
+            click.echo(f"  Scanning subfolders of {fid}...")
+            all_folder_ids.extend(_list_subfolders(drive, fid))
+        click.echo(f"  Found {len(all_folder_ids)} folders total")
+        for folder_id in all_folder_ids:
             q = " and ".join(query_parts + [f"'{folder_id}' in parents"])
             docs.extend(_paginate_files(drive, q))
     else:
@@ -173,6 +199,25 @@ def export_google_docs(
     except HttpError as e:
         _check_auth_error(e)
     click.echo(f"Found {len(docs)} document(s) to export")
+
+    if cfg.get("_dry_run"):
+        folder_cache: dict[str, str] = {}
+        for doc in docs:
+            title = doc.get("name", "Untitled")
+            modified = doc.get("modifiedTime", "")[:10]
+            doc_id = doc["id"]
+            fname = f"{_slugify(title)}-{doc_id[:8]}.md"
+            doc_parents = doc.get("parents", [])
+            if doc_parents:
+                folder_path = _resolve_folder_path(drive, doc_parents[0], folder_cache)
+            else:
+                folder_path = ""
+            if not folder_path:
+                folder_path = "_unsorted"
+            rel = f"{folder_path}/{fname}"
+            click.echo(f"  {modified}  {rel}")
+        click.echo(f"\n{len(docs)} docs would be exported")
+        return
 
     out.mkdir(parents=True, exist_ok=True)
     folder_cache: dict[str, str] = {}
