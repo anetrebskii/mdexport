@@ -122,11 +122,53 @@ def add_linear(name, output, token, team):
 @click.option("--token", envvar="GOOGLE_TOKEN", help="Google OAuth access token (alternative to service account)")
 @click.option("--folder", "-f", multiple=True, help="Google Drive folder ID(s) to export from")
 def add_google_docs(name, output, service_account_key, token, folder):
-    """Add a Google Docs export."""
-    from mdexport.registry import register
+    """Add a Google Docs export.
 
-    if not service_account_key and not token:
-        raise click.ClickException("Provide --service-account-key or --token (GOOGLE_TOKEN)")
+    Exports Google Docs as Markdown files via the Drive API.
+
+    \b
+    Auth option 1 — Service Account (recommended for automation):
+      1. Go to https://console.cloud.google.com/iam-admin/serviceaccounts
+      2. Create a service account (or use existing)
+      3. Keys tab -> Add Key -> Create new key -> JSON
+      4. Download the JSON key file
+      5. Enable the Google Drive API and Google Docs API:
+         https://console.cloud.google.com/apis/library
+      6. Share the folders/docs with the service account email
+         (the email looks like name@project.iam.gserviceaccount.com)
+      7. Use --service-account-key path/to/key.json
+
+    \b
+    Auth option 2 — gcloud (recommended for personal use):
+      1. Install gcloud CLI: https://cloud.google.com/sdk/docs/install
+      2. Run: gcloud auth application-default login --scopes=openid,https://www.googleapis.com/auth/userinfo.email,https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/drive.readonly,https://www.googleapis.com/auth/documents.readonly
+      3. No --token needed! Credentials are stored automatically.
+
+    \b
+    Auth option 3 — OAuth token via playground (simplest, short-lived):
+      1. Open https://developers.google.com/oauthplayground
+      2. In the left panel, find and check:
+         - Google Drive API v3 -> https://www.googleapis.com/auth/drive.readonly
+         - Google Docs API v1 -> https://www.googleapis.com/auth/documents.readonly
+      3. Click "Authorize APIs" -> sign in with your Google account
+      4. Click "Exchange authorization code for tokens"
+      5. Copy the "Access token" value
+      6. Use: mdexport add google-docs -n NAME -o PATH --token ACCESS_TOKEN
+      Note: Tokens expire after ~1 hour. Repeat steps 4-6 to refresh.
+
+    \b
+    Folder IDs:
+      Open a folder in Google Drive, the ID is in the URL:
+      https://drive.google.com/drive/folders/FOLDER_ID_HERE
+      Without -f, exports all docs accessible to the account.
+
+    \b
+    Examples:
+      mdexport add google-docs -n my-docs -o ./docs
+      mdexport add google-docs -n my-docs -o ./docs -f FOLDER_ID
+      mdexport add google-docs -n my-docs -o ./docs --service-account-key ~/sa-key.json
+    """
+    from mdexport.registry import register
 
     out = str(Path(output).resolve())
 
@@ -248,7 +290,12 @@ def info(name):
     elif cfg["type"] == "google-docs":
         folders = cfg.get("folder_ids")
         click.echo(f"Folders: {', '.join(folders) if folders else 'all accessible'}")
-        auth = "service account" if cfg.get("service_account_key") else "token"
+        if cfg.get("service_account_key"):
+            auth = "service account"
+        elif cfg.get("token"):
+            auth = "token"
+        else:
+            auth = "application default credentials (gcloud)"
         click.echo(f"Auth:    {auth}")
     elif cfg["type"] == "notion":
         pages = cfg.get("page_ids")
