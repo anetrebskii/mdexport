@@ -5,7 +5,7 @@ from pathlib import Path
 @click.group()
 @click.pass_context
 def cli(ctx):
-    """Export GitHub, Slack, and Linear data to local Markdown files."""
+    """Export GitHub, Slack, Linear, Google Docs, and Notion data to local Markdown files."""
     ctx.ensure_object(dict)
 
 
@@ -114,6 +114,28 @@ def add_google_docs(name, output, service_account_key, token, folder):
     click.echo(f"Added Google Docs export '{name}' -> {out}")
 
 
+@add.command("notion")
+@click.option("--name", "-n", required=True, help="Name for this export")
+@click.option("--output", "-o", type=click.Path(), required=True, help="Output directory")
+@click.option("--token", envvar="NOTION_TOKEN", required=True, help="Notion integration token (ntn_...)")
+@click.option("--page", "-p", multiple=True, help="Specific page ID(s) to export")
+@click.option("--database", "-d", multiple=True, help="Database ID(s) — export all pages in these databases")
+def add_notion(name, output, token, page, database):
+    """Add a Notion export."""
+    from mdexport.registry import register
+
+    out = str(Path(output).resolve())
+
+    register(name, {
+        "type": "notion",
+        "output": out,
+        "token": token,
+        "page_ids": list(page) if page else None,
+        "database_ids": list(database) if database else None,
+    })
+    click.echo(f"Added Notion export '{name}' -> {out}")
+
+
 # --- list ---
 
 @cli.command("list")
@@ -153,6 +175,15 @@ def _describe_source(cfg: dict) -> str:
         if folders:
             return f"{len(folders)} folder(s)"
         return "all accessible docs"
+    elif t == "notion":
+        pages = cfg.get("page_ids")
+        dbs = cfg.get("database_ids")
+        parts = []
+        if pages:
+            parts.append(f"{len(pages)} page(s)")
+        if dbs:
+            parts.append(f"{len(dbs)} database(s)")
+        return ", ".join(parts) if parts else "all shared pages"
     return ""
 
 
@@ -189,6 +220,15 @@ def info(name):
         click.echo(f"Folders: {', '.join(folders) if folders else 'all accessible'}")
         auth = "service account" if cfg.get("service_account_key") else "token"
         click.echo(f"Auth:    {auth}")
+    elif cfg["type"] == "notion":
+        pages = cfg.get("page_ids")
+        dbs = cfg.get("database_ids")
+        if pages:
+            click.echo(f"Pages:   {', '.join(pages)}")
+        if dbs:
+            click.echo(f"Databases: {', '.join(dbs)}")
+        if not pages and not dbs:
+            click.echo("Scope:   all shared pages")
 
     added = cfg.get("added_at", "unknown")
     if added and added != "unknown":
@@ -272,10 +312,10 @@ def _resolve_token(cfg: dict) -> str:
 def _sync_one(name: str, cfg: dict):
     t = cfg["type"]
     out = Path(cfg["output"])
-    token = _resolve_token(cfg)
     since = cfg.get("synced_at")
 
     if t == "github":
+        token = _resolve_token(cfg)
         from mdexport.github import export_github
         export_github(
             cfg["repo"], token, out,
@@ -286,6 +326,7 @@ def _sync_one(name: str, cfg: dict):
         )
 
     elif t == "slack":
+        token = _resolve_token(cfg)
         from mdexport.slack import export_slack
         export_slack(
             token, out,
@@ -294,6 +335,7 @@ def _sync_one(name: str, cfg: dict):
         )
 
     elif t == "linear":
+        token = _resolve_token(cfg)
         from mdexport.linear import export_linear
         export_linear(
             token, out,
@@ -306,6 +348,16 @@ def _sync_one(name: str, cfg: dict):
         export_google_docs(
             cfg, out,
             folder_ids=cfg.get("folder_ids"),
+            since=since,
+        )
+
+    elif t == "notion":
+        token = _resolve_token(cfg)
+        from mdexport.notion import export_notion
+        export_notion(
+            token, out,
+            page_ids=cfg.get("page_ids"),
+            database_ids=cfg.get("database_ids"),
             since=since,
         )
 
