@@ -49,8 +49,37 @@ def add_github(repo, name, output, token, issues, prs, wiki):
 @click.option("--token", envvar="SLACK_TOKEN", required=True, help="Slack user token (xoxp-...)")
 @click.option("--channel", "-c", multiple=True, help="Channels (default: all public)")
 @click.option("--days", type=int, default=90, help="Days of history (default: 90)")
-def add_slack(name, output, token, channel, days):
-    """Add a Slack workspace export."""
+@click.option("--dms/--no-dms", default=False, help="Include DMs and group DMs (needs im:history,im:read,mpim:history,mpim:read scopes)")
+def add_slack(name, output, token, channel, days, dms):
+    """Add a Slack workspace export.
+
+    Exports messages from Slack channels to Markdown files.
+
+    \b
+    Token setup:
+      1. Create app at https://api.slack.com/apps
+      2. Go to OAuth & Permissions
+      3. Under "User Token Scopes" (NOT Bot Token Scopes), add:
+         - channels:history, channels:read (public channels)
+         - groups:history, groups:read (private channels)
+         - users:read (resolve user names)
+         - im:history, im:read (DMs, if using --dms)
+         - mpim:history, mpim:read (group DMs, if using --dms)
+      4. Click "Install to Workspace" (or "Reinstall" if already installed)
+      5. Copy the "User OAuth Token" (starts with xoxp-, NOT xoxb-)
+
+    \b
+    Important: Use the User token (xoxp-...), not the Bot token (xoxb-...).
+    The user token accesses channels your account is in.
+    The bot token only accesses channels the bot is added to.
+    If you added new scopes, you must reinstall the app.
+
+    \b
+    Examples:
+      mdexport add slack -n my-slack -o ./slack --token xoxp-...
+      mdexport add slack -n my-slack -o ./slack -c general -c engineering
+      mdexport add slack -n my-slack -o ./slack --dms --days 30
+    """
     from mdexport.registry import register
 
     out = str(Path(output).resolve())
@@ -61,6 +90,7 @@ def add_slack(name, output, token, channel, days):
         "token": token,
         "channels": list(channel) if channel else None,
         "days": days,
+        "dms": dms,
     })
     click.echo(f"Added Slack export '{name}' -> {out}")
 
@@ -332,6 +362,7 @@ def _sync_one(name: str, cfg: dict):
             token, out,
             channels=cfg.get("channels"),
             days=cfg.get("days", 90),
+            dms=cfg.get("dms", False),
         )
 
     elif t == "linear":

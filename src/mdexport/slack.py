@@ -47,7 +47,18 @@ def _format_message(msg: dict, users: dict) -> str:
     lines = [f"**{user}** - {date}", "", text]
 
     # Thread replies
-    if msg.get("reply_count"):
+    if msg.get("_thread_replies"):
+        lines.append("")
+        for reply in msg["_thread_replies"]:
+            r_user = users.get(reply.get("user", ""), reply.get("user", "unknown"))
+            r_ts = float(reply.get("ts", 0))
+            r_date = datetime.fromtimestamp(r_ts, tz=timezone.utc).strftime("%Y-%m-%d %H:%M")
+            r_text = reply.get("text", "")
+            r_text = re.sub(r"<@(U[A-Z0-9]+)>", replace_mention, r_text)
+            lines.append(f"> **{r_user}** - {r_date}")
+            lines.append(f"> {r_text}")
+            lines.append(">")
+    elif msg.get("reply_count"):
         lines.append(f"\n> _{msg['reply_count']} replies in thread_")
 
     # Attachments
@@ -107,6 +118,25 @@ def _export_channel(client: WebClient, channel: dict, users: dict, out: Path, ol
         click.echo(f"    No messages")
         return
 
+    # Fetch thread replies
+    threaded = [m for m in messages if m.get("reply_count") and m.get("ts")]
+    for m in threaded:
+        try:
+            replies = []
+            t_cursor = None
+            while True:
+                t_resp = client.conversations_replies(
+                    channel=cid, ts=m["ts"], cursor=t_cursor, limit=200
+                )
+                replies.extend(t_resp.get("messages", []))
+                t_cursor = t_resp.get("response_metadata", {}).get("next_cursor")
+                if not t_cursor:
+                    break
+            # First message in replies is the parent — skip it
+            m["_thread_replies"] = [r for r in replies[1:] if r.get("ts") != m["ts"]]
+        except SlackApiError:
+            pass
+
     # Sort chronologically
     messages.sort(key=lambda m: float(m.get("ts", 0)))
 
@@ -139,7 +169,21 @@ def _export_channel(client: WebClient, channel: dict, users: dict, out: Path, ol
     click.echo(f"    {len(messages)} messages")
 
 
-def export_slack(token: str, out: Path, *, channels: list[str] | None = None, days: int = 90):
+def _dm_name(channel: dict, users: dict) -> str:
+    """Generate a name for a DM or group DM channel."""
+    if channel.get("is_im"):
+        other = channel.get("user", "")
+        return f"dm-{users.get(other, other)}"
+    if channel.get("is_mpim"):
+        # Group DM — name is like "mpdm-user1--user2--user3-1"
+        name = channel.get("name", "")
+        if name.startswith("mpdm-"):
+            return "group-" + name[5:].rstrip("-1234567890")
+        return f"group-{channel['id']}"
+    return channel.get("name", channel["id"])
+
+
+def export_slack(token: str, out: Path, *, channels: list[str] | None = None, days: int = 90, dms: bool = False):
     client = WebClient(token=token)
     client.retry_handlers.append(RateLimitErrorRetryHandler(max_retry_count=5))
     client.retry_handlers.append(ServerErrorRetryHandler(max_retry_count=5))
@@ -151,23 +195,39 @@ def export_slack(token: str, out: Path, *, channels: list[str] | None = None, da
 
     oldest = (datetime.now(timezone.utc) - timedelta(days=days)).timestamp()
 
+    types = "public_channel,private_channel"
+    if dms:
+        types += ",im,mpim"
+
     click.echo("Listing channels...")
     all_channels = []
     cursor = None
     while True:
         resp = client.conversations_list(
             cursor=cursor, limit=200,
-            types="public_channel,private_channel"
+            types=types,
         )
         all_channels.extend(resp["channels"])
         cursor = resp.get("response_metadata", {}).get("next_cursor")
         if not cursor:
             break
 
+    # Assign readable names to DMs
+    for ch in all_channels:
+        if ch.get("is_im") or ch.get("is_mpim"):
+            ch["name"] = _dm_name(ch, users)
+
     if channels:
         all_channels = [c for c in all_channels if c["name"] in channels]
 
-    click.echo(f"Exporting {len(all_channels)} channels (last {days} days)...")
+    dm_count = sum(1 for c in all_channels if c.get("is_im") or c.get("is_mpim"))
+    ch_count = len(all_channels) - dm_count
+    parts = []
+    if ch_count:
+        parts.append(f"{ch_count} channels")
+    if dm_count:
+        parts.append(f"{dm_count} DMs")
+    click.echo(f"Exporting {', '.join(parts)} (last {days} days)...")
 
     for ch in all_channels:
         _export_channel(client, ch, users, out, oldest)
