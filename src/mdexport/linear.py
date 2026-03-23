@@ -27,8 +27,15 @@ def _query(token: str, query: str, variables: dict | None = None) -> dict:
                 headers={"Authorization": token, "Content-Type": "application/json"},
                 timeout=30,
             )
-            resp.raise_for_status()
             data = resp.json()
+            if resp.status_code >= 400:
+                errors = data.get("errors", [])
+                if errors:
+                    for err in errors:
+                        click.echo(f"  GraphQL error: {err.get('message', err)}", err=True)
+                        if err.get("extensions"):
+                            click.echo(f"    {err['extensions']}", err=True)
+                resp.raise_for_status()
             if "errors" in data:
                 raise click.ClickException(f"Linear API error: {data['errors']}")
             return data["data"]
@@ -55,14 +62,38 @@ def _get_teams(token: str) -> list[dict]:
     return data["teams"]["nodes"]
 
 
+def _get_labels(token: str) -> dict[str, str]:
+    """Fetch all workspace labels, return {id: name} map."""
+    labels = {}
+    after = None
+    while True:
+        variables: dict = {"after": after}
+        data = _query(token, """
+            query($after: String) {
+                issueLabels(first: 100, after: $after) {
+                    nodes { id name }
+                    pageInfo { hasNextPage endCursor }
+                }
+            }
+        """, variables)
+        for l in data["issueLabels"]["nodes"]:
+            labels[l["id"]] = l["name"]
+        page = data["issueLabels"]["pageInfo"]
+        if not page["hasNextPage"]:
+            break
+        after = page["endCursor"]
+    return labels
+
+
 def _get_issues(token: str, team_id: str, since: str | None = None) -> list[dict]:
     issues = []
     after = None
     while True:
-        variables = {"teamId": team_id, "after": after, "since": since}
+        variables: dict = {"teamId": team_id, "after": after}
         if since:
+            variables["since"] = since
             query_str = """
-            query($teamId: String!, $after: String, $since: DateTime!) {
+            query($teamId: ID!, $after: String, $since: DateTime!) {
                 issues(
                     filter: { team: { id: { eq: $teamId } }, updatedAt: { gte: $since } }
                     first: 50
@@ -70,7 +101,7 @@ def _get_issues(token: str, team_id: str, since: str | None = None) -> list[dict
                     orderBy: updatedAt"""
         else:
             query_str = """
-            query($teamId: String!, $after: String) {
+            query($teamId: ID!, $after: String) {
                 issues(
                     filter: { team: { id: { eq: $teamId } } }
                     first: 50
@@ -99,44 +130,40 @@ def _get_issues(token: str, team_id: str, since: str | None = None) -> list[dict
     return issues
 
 
-def _get_comments(token: str, issue_id: str) -> list[dict]:
+def _get_comments_and_history(token: str, issue_id: str) -> tuple[list[dict], list[dict]]:
+    """Fetch comments and history for an issue in a single query."""
     data = _query(token, """
         query($issueId: String!) {
-            comments(filter: { issue: { id: { eq: $issueId } } }, orderBy: createdAt) {
-                nodes {
-                    body
-                    user { name }
-                    createdAt
+            issue(id: $issueId) {
+                comments(orderBy: createdAt) {
+                    nodes {
+                        body
+                        user { name }
+                        createdAt
+                    }
+                }
+                history {
+                    nodes {
+                        createdAt
+                        actor { name }
+                        fromState { name }
+                        toState { name }
+                        fromAssignee { name }
+                        toAssignee { name }
+                        fromPriority
+                        toPriority
+                        addedLabelIds
+                        removedLabelIds
+                    }
                 }
             }
         }
     """, {"issueId": issue_id})
-    return data["comments"]["nodes"]
+    issue = data["issue"]
+    return issue["comments"]["nodes"], issue["history"]["nodes"]
 
 
-def _get_history(token: str, issue_id: str) -> list[dict]:
-    data = _query(token, """
-        query($issueId: ID!) {
-            issueHistory(issueId: $issueId) {
-                nodes {
-                    createdAt
-                    actor { name }
-                    fromState { name }
-                    toState { name }
-                    fromAssignee { name }
-                    toAssignee { name }
-                    fromPriority
-                    toPriority
-                    addedLabels { nodes { name } }
-                    removedLabels { nodes { name } }
-                }
-            }
-        }
-    """, {"issueId": issue_id})
-    return data["issueHistory"]["nodes"]
-
-
-def _format_history(history: list[dict]) -> str:
+def _format_history(history: list[dict], label_map: dict[str, str]) -> str:
     lines = []
     for h in history:
         date = h["createdAt"][:16].replace("T", " ")
@@ -152,10 +179,12 @@ def _format_history(history: list[dict]) -> str:
             fr_name = fr.get("name", "unassigned") if fr else "unassigned"
             to_name = to.get("name", "unassigned") if to else "unassigned"
             changes.append(f"assignee: {fr_name} -> {to_name}")
-        for label in (h.get("addedLabels") or {}).get("nodes", []):
-            changes.append(f"+label `{label['name']}`")
-        for label in (h.get("removedLabels") or {}).get("nodes", []):
-            changes.append(f"-label `{label['name']}`")
+        for lid in h.get("addedLabelIds") or []:
+            name = label_map.get(lid, lid[:8])
+            changes.append(f"+label `{name}`")
+        for lid in h.get("removedLabelIds") or []:
+            name = label_map.get(lid, lid[:8])
+            changes.append(f"-label `{name}`")
 
         if changes:
             lines.append(f"- **{date}** {actor_name}: {', '.join(changes)}")
@@ -182,6 +211,8 @@ def export_linear(token: str, out: Path, *, teams: list[str] | None = None, sinc
 
     click.echo(f"Exporting {len(all_teams)} team(s): {', '.join(t['key'] for t in all_teams)}")
 
+    label_map = _get_labels(token)
+
     for team in all_teams:
         team_dir = out / team["key"]
         team_dir.mkdir(parents=True, exist_ok=True)
@@ -196,8 +227,7 @@ def export_linear(token: str, out: Path, *, teams: list[str] | None = None, sinc
             if _synced_today(team_dir / fname):
                 skipped += 1
                 continue
-            comments = _get_comments(token, issue["id"])
-            history = _get_history(token, issue["id"])
+            comments, history = _get_comments_and_history(token, issue["id"])
 
             labels = ", ".join(l["name"] for l in issue.get("labels", {}).get("nodes", []))
             assignee = issue.get("assignee", {})
@@ -232,7 +262,7 @@ def export_linear(token: str, out: Path, *, teams: list[str] | None = None, sinc
 
 ## History
 
-{_format_history(history)}
+{_format_history(history, label_map)}
 
 ## Comments
 
