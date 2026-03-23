@@ -85,6 +85,35 @@ def add_linear(name, output, token, team):
     click.echo(f"Added Linear export '{name}' -> {out}")
 
 
+@add.command("google-docs")
+@click.option("--name", "-n", required=True, help="Name for this export")
+@click.option("--output", "-o", type=click.Path(), required=True, help="Output directory")
+@click.option("--service-account-key", type=click.Path(exists=True), help="Path to service account JSON key file")
+@click.option("--token", envvar="GOOGLE_TOKEN", help="Google OAuth access token (alternative to service account)")
+@click.option("--folder", "-f", multiple=True, help="Google Drive folder ID(s) to export from")
+def add_google_docs(name, output, service_account_key, token, folder):
+    """Add a Google Docs export."""
+    from mdexport.registry import register
+
+    if not service_account_key and not token:
+        raise click.ClickException("Provide --service-account-key or --token (GOOGLE_TOKEN)")
+
+    out = str(Path(output).resolve())
+
+    cfg = {
+        "type": "google-docs",
+        "output": out,
+        "folder_ids": list(folder) if folder else None,
+    }
+    if service_account_key:
+        cfg["service_account_key"] = str(Path(service_account_key).resolve())
+    if token:
+        cfg["token"] = token
+
+    register(name, cfg)
+    click.echo(f"Added Google Docs export '{name}' -> {out}")
+
+
 # --- list ---
 
 @cli.command("list")
@@ -119,6 +148,11 @@ def _describe_source(cfg: dict) -> str:
         if teams:
             return f"teams: {', '.join(teams)}"
         return "all teams"
+    elif t == "google-docs":
+        folders = cfg.get("folder_ids")
+        if folders:
+            return f"{len(folders)} folder(s)"
+        return "all accessible docs"
     return ""
 
 
@@ -150,6 +184,11 @@ def info(name):
     elif cfg["type"] == "linear":
         teams = cfg.get("teams")
         click.echo(f"Teams:   {', '.join(teams) if teams else 'all'}")
+    elif cfg["type"] == "google-docs":
+        folders = cfg.get("folder_ids")
+        click.echo(f"Folders: {', '.join(folders) if folders else 'all accessible'}")
+        auth = "service account" if cfg.get("service_account_key") else "token"
+        click.echo(f"Auth:    {auth}")
 
     added = cfg.get("added_at", "unknown")
     if added and added != "unknown":
@@ -259,6 +298,14 @@ def _sync_one(name: str, cfg: dict):
         export_linear(
             token, out,
             teams=cfg.get("teams"),
+            since=since,
+        )
+
+    elif t == "google-docs":
+        from mdexport.googledocs import export_google_docs
+        export_google_docs(
+            cfg, out,
+            folder_ids=cfg.get("folder_ids"),
             since=since,
         )
 
