@@ -81,6 +81,7 @@ def _list_subfolders(drive, folder_id: str) -> list[str]:
         resp = drive.files().list(
             q=q, fields="nextPageToken, files(id)",
             pageSize=100, pageToken=page_token,
+            corpora="allDrives",
             supportsAllDrives=True, includeItemsFromAllDrives=True,
         ).execute()
         for f in resp.get("files", []):
@@ -127,6 +128,7 @@ def _paginate_files(drive, query: str) -> list[dict]:
             fields="nextPageToken, files(id, name, modifiedTime, createdTime, owners, webViewLink, parents)",
             pageSize=100,
             pageToken=page_token,
+            corpora="allDrives",
             supportsAllDrives=True,
             includeItemsFromAllDrives=True,
         ).execute()
