@@ -93,7 +93,7 @@ def _get_issues(token: str, team_id: str, since: str | None = None) -> list[dict
         if since:
             variables["since"] = since
             query_str = """
-            query($teamId: ID!, $after: String, $since: DateTime!) {
+            query($teamId: ID!, $after: String, $since: DateTimeOrDuration!) {
                 issues(
                     filter: { team: { id: { eq: $teamId } }, updatedAt: { gte: $since } }
                     first: 50
