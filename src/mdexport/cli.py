@@ -321,6 +321,67 @@ def info(name):
     click.echo(f"Token:   {'configured' if cfg.get('token') else 'missing'}")
 
 
+# --- auth ---
+
+@cli.command("auth")
+@click.argument("name")
+@click.option("--token", help="New token value")
+@click.option("--service-account-key", type=click.Path(exists=True), help="Path to service account JSON key file (Google Docs)")
+@click.option("--gcloud", is_flag=True, default=False, help="Re-authenticate via gcloud application-default login (Google Docs)")
+def auth(name, token, service_account_key, gcloud):
+    """Update authentication for an existing export.
+
+    \b
+    Examples:
+      mdexport auth my-github --token ghp_NEW_TOKEN
+      mdexport auth my-slack --token xoxp-NEW_TOKEN
+      mdexport auth my-docs --gcloud
+      mdexport auth my-docs --service-account-key ~/new-key.json
+    """
+    from mdexport.registry import get, update_config
+
+    cfg = get(name)
+    if not cfg:
+        raise click.ClickException(f"Export '{name}' not found. Run 'mdexport list'.")
+
+    if gcloud:
+        if cfg["type"] != "google-docs":
+            raise click.ClickException("--gcloud is only supported for google-docs exports.")
+        from mdexport.googledocs import ADC_CMD
+        click.echo(f"Running: {ADC_CMD}")
+        import subprocess
+        result = subprocess.run(ADC_CMD, shell=True)
+        if result.returncode != 0:
+            raise click.ClickException("gcloud auth failed.")
+        # Remove stored token/key so ADC is used
+        update_config(name, {"token": None, "service_account_key": None})
+        click.echo(f"Auth updated for '{name}' (using application default credentials).")
+        return
+
+    if service_account_key:
+        if cfg["type"] != "google-docs":
+            raise click.ClickException("--service-account-key is only supported for google-docs exports.")
+        update_config(name, {
+            "service_account_key": str(Path(service_account_key).resolve()),
+            "token": None,
+        })
+        click.echo(f"Auth updated for '{name}' (using service account).")
+        return
+
+    if token:
+        updates = {"token": token}
+        if cfg["type"] == "google-docs":
+            updates["service_account_key"] = None
+        update_config(name, updates)
+        click.echo(f"Auth updated for '{name}'.")
+        return
+
+    raise click.ClickException(
+        "Provide one of: --token, --service-account-key, or --gcloud.\n"
+        "Run 'mdexport auth --help' for details."
+    )
+
+
 # --- remove ---
 
 @cli.command("remove")

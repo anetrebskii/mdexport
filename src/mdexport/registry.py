@@ -44,6 +44,15 @@ def get_all() -> dict:
     return _load()
 
 
+def update_config(name: str, updates: dict):
+    data = _load()
+    if name not in data:
+        return False
+    data[name].update(updates)
+    _save(data)
+    return True
+
+
 def update_synced(name: str):
     data = _load()
     if name in data:
