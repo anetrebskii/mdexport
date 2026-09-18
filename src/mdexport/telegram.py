@@ -17,6 +17,8 @@ DC_ADDRESSES = {
     5: "91.108.56.130",
 }
 
+SIGNED_OUT = "Telegram signed you out of this account."
+
 ID_MARKER = re.compile(r"<!-- id:(\d+) -->")
 DAY_HEADING = re.compile(r"^## (\d{4}-\d{2}-\d{2})$", re.MULTILINE)
 
@@ -143,15 +145,17 @@ def _export_chat(client, dialog, out: Path, days: int) -> int:
 
 
 def export_telegram(dc: int, auth_key: str, out: Path, *, name: str | None = None, chats: list[str] | None = None, days: int = 14, dms: bool = False):
-    from telethon.errors import FloodWaitError
+    from telethon.errors import AuthKeyNotFound, FloodWaitError, UnauthorizedError
+
+    gone = (AuthKeyNotFound, UnauthorizedError)
 
     client = _client(dc, auth_key)
     out.mkdir(parents=True, exist_ok=True)
-    client.connect()
 
     try:
+        client.connect()
         if not client.is_user_authorized():
-            raise click.ClickException("Telegram signed you out of this account.")
+            raise click.ClickException(SIGNED_OUT)
 
         me = client.get_me()
         account = " ".join(filter(None, [me.first_name, me.last_name])) or me.username or ""
@@ -178,9 +182,13 @@ def export_telegram(dc: int, auth_key: str, out: Path, *, name: str | None = Non
                     exported += 1
             except FloodWaitError as e:
                 raise click.ClickException(f"Telegram asked to wait {max(1, round(e.seconds / 60))} minutes before reading more.")
+            except gone:
+                raise click.ClickException(SIGNED_OUT)
             except Exception as e:
                 click.echo(f"    Skipped ({e})")
 
         click.echo(f"  Exported {exported} chats total")
+    except gone:
+        raise click.ClickException(SIGNED_OUT)
     finally:
         client.disconnect()
