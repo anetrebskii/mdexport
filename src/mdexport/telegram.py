@@ -157,7 +157,7 @@ def _me(client):
         return client.get_me()
     except RPCError as e:
         if _is_signed_out(e):
-            raise click.ClickException(SIGNED_OUT)
+            raise click.ClickException(f"{SIGNED_OUT} ({type(e).__name__})")
         raise click.ClickException(f"Telegram refused the session: {e}")
 
 
@@ -185,8 +185,8 @@ def list_chats(dc: int, auth_key: str) -> list[dict]:
                 "kind": "dm" if dialog.is_user else "group" if dialog.is_group else "channel",
             })
         return chats
-    except (AuthKeyNotFound, UnauthorizedError):
-        raise click.ClickException(SIGNED_OUT)
+    except (AuthKeyNotFound, UnauthorizedError) as e:
+        raise click.ClickException(f"{SIGNED_OUT} ({type(e).__name__})")
     finally:
         client.disconnect()
 
@@ -232,7 +232,7 @@ def export_telegram(dc: int, auth_key: str, out: Path, *, name: str | None = Non
                 click.echo(f"    Skipped ({e})")
 
         click.echo(f"  Exported {exported} chats total")
-    except gone:
-        raise click.ClickException(SIGNED_OUT)
+    except gone as e:
+        raise click.ClickException(f"{SIGNED_OUT} ({type(e).__name__})")
     finally:
         client.disconnect()
