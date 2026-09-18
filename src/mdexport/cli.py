@@ -407,18 +407,23 @@ def info(name):
 # --- chats ---
 
 @cli.command("chats")
-@click.argument("name")
+@click.argument("name", required=False)
 def chats(name):
-    """Print the chats a Telegram export can read, as JSON."""
+    """Print the account and the chats a Telegram session can read, as JSON.
+
+    Without NAME it reads the session from TELEGRAM_DC and TELEGRAM_AUTH_KEY,
+    which is how Notula Collect asks before a source exists.
+    """
     import json
     import os
     from mdexport.registry import get
 
-    cfg = get(name)
-    if not cfg:
-        raise click.ClickException(f"Export '{name}' not found. Run 'mdexport list'.")
-    if cfg["type"] != "telegram":
-        raise click.ClickException("chats is only for telegram exports.")
+    if name:
+        cfg = get(name)
+        if not cfg:
+            raise click.ClickException(f"Export '{name}' not found. Run 'mdexport list'.")
+        if cfg["type"] != "telegram":
+            raise click.ClickException("chats is only for telegram exports.")
     dc, key = os.environ.get("TELEGRAM_DC"), os.environ.get("TELEGRAM_AUTH_KEY")
     if not dc or not key:
         raise click.ClickException("No Telegram session for this export. Sign in again.")
@@ -431,20 +436,26 @@ def chats(name):
 # --- threads ---
 
 @cli.command("threads")
-@click.argument("name")
+@click.argument("name", required=False)
 @click.option("--search", "-q", help="Gmail search to look at instead of the saved one")
 @click.option("--days", type=int, help="Days of history to look at instead of the saved one")
 def threads(name, search, days):
-    """Print the threads a Gmail export would take, as JSON."""
+    """Print the threads a Gmail export would take, as JSON.
+
+    Without NAME it reads the sign-in from GOOGLE_TOKEN, which is how Notula
+    Collect asks before a source exists.
+    """
     import json
     import os
     from mdexport.registry import get
 
-    cfg = get(name)
-    if not cfg:
-        raise click.ClickException(f"Export '{name}' not found. Run 'mdexport list'.")
-    if cfg["type"] != "gmail":
-        raise click.ClickException("threads is only for gmail exports.")
+    cfg = {}
+    if name:
+        cfg = get(name)
+        if not cfg:
+            raise click.ClickException(f"Export '{name}' not found. Run 'mdexport list'.")
+        if cfg["type"] != "gmail":
+            raise click.ClickException("threads is only for gmail exports.")
 
     token = os.environ.get("GOOGLE_TOKEN")
     if token:

@@ -170,13 +170,16 @@ def _is_signed_out(e) -> bool:
     return name in SIGNED_OUT_ERRORS or any(word in message for word in ("AUTH_KEY", "SESSION_REVOKED", "SESSION_EXPIRED", "USER_DEACTIVATED", "UNAUTHORIZED"))
 
 
-def list_chats(dc: int, auth_key: str) -> list[dict]:
+def list_chats(dc: int, auth_key: str) -> dict:
     from telethon.errors import AuthKeyNotFound, UnauthorizedError
 
     client = _client(dc, auth_key)
     try:
         client.connect()
-        _me(client)
+        me = _me(client)
+        account = " ".join(filter(None, [me.first_name, me.last_name])) or me.username or ""
+        if me.phone:
+            account = f"{account}, +{me.phone}" if account else f"+{me.phone}"
         chats = []
         for dialog in client.iter_dialogs():
             if not (dialog.is_user or dialog.is_group or dialog.is_channel):
@@ -187,7 +190,7 @@ def list_chats(dc: int, auth_key: str) -> list[dict]:
                 "username": f"@{username}" if username else "",
                 "kind": "dm" if dialog.is_user else "group" if dialog.is_group else "channel",
             })
-        return chats
+        return {"account": account, "chats": chats}
     except (AuthKeyNotFound, UnauthorizedError) as e:
         raise click.ClickException(f"{SIGNED_OUT} ({type(e).__name__})")
     finally:
