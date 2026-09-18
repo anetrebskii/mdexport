@@ -218,10 +218,10 @@ def export_telegram(dc: int, auth_key: str, out: Path, *, name: str | None = Non
             update_config(name, {"account": account})
 
         dialogs = [d for d in client.iter_dialogs() if d.is_user or d.is_group or d.is_channel]
-        if not dms:
-            dialogs = [d for d in dialogs if not d.is_user]
         if chats:
             dialogs = [d for d in dialogs if _matches(d, chats)]
+        elif not dms:
+            dialogs = [d for d in dialogs if not d.is_user]
 
         click.echo(f"Exporting {len(dialogs)} chats (last {days} days)...")
         exported = 0

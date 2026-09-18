@@ -100,7 +100,7 @@ def add_slack(name, output, token, channel, days, dms):
 @click.option("--output", "-o", type=click.Path(), required=True, help="Output directory")
 @click.option("--chat", "-c", multiple=True, help="Chats by @username, t.me link or title (default: all)")
 @click.option("--days", type=int, default=14, help="Days of history on the first run (default: 14)")
-@click.option("--dms/--no-dms", default=False, help="Include private chats")
+@click.option("--dms/--no-dms", default=False, help="Include private chats when no chat is named with -c")
 def add_telegram(name, output, chat, days, dms):
     """Add a Telegram export.
 
