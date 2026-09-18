@@ -1,6 +1,6 @@
 # mdexport
 
-Export data from GitHub, Slack, Linear, Google Docs, and Notion into local Markdown files.
+Export data from GitHub, Slack, Telegram, Gmail, Linear, Google Docs, and Notion into local Markdown files.
 
 mdexport is a CLI tool that pulls content from your tools and saves it as plain Markdown — readable, searchable, version-controllable. Register your sources once, then sync whenever you need fresh data.
 
@@ -59,6 +59,32 @@ mdexport add slack -n my-slack -o ./output/slack --dms
 ```
 
 Options: `-c` channels (default: all public), `--days` history depth (default: 90), `--dms/--no-dms`.
+
+#### Telegram
+
+```bash
+mdexport add telegram -n my-telegram -o ./output/telegram
+
+# Specific chats, longer history, private chats too
+mdexport add telegram -n my-telegram -o ./output/telegram -c @durov -c "Client group" --days 30 --dms
+```
+
+Options: `-c` chats by @username, t.me link or title (default: all), `--days` history on the first run (default: 14), `--dms/--no-dms`.
+
+Reads with your own Telegram account over MTProto. The session is not stored here: `mdexport sync` expects `TELEGRAM_DC` and `TELEGRAM_AUTH_KEY`, which Notula Collect sets from its Telegram sign-in window. Later runs export only messages newer than the last one in each file.
+
+#### Gmail
+
+```bash
+mdexport add gmail -n my-mail -o ./output/mail
+
+# A search, and more history on the first run
+mdexport add gmail -n my-mail -o ./output/mail -q "label:clients OR from:boss@acme.com" --days 90
+```
+
+Options: `-q` Gmail search (default: the mailbox without spam and trash), `--days` history on the first run (default: 14).
+
+One Markdown file per thread. Needs a Google access token with `https://www.googleapis.com/auth/gmail.readonly`, in `GOOGLE_TOKEN` or `--token`; Notula Collect refreshes it before every run.
 
 #### Linear
 
@@ -132,7 +158,7 @@ mdexport sync --full
 mdexport sync --dry-run
 ```
 
-GitHub, Linear, Google Docs, and Notion support incremental sync — only new/updated items are fetched after the first full sync.
+GitHub, Telegram, Gmail, Linear, Google Docs, and Notion support incremental sync — only new/updated items are fetched after the first full sync.
 
 ## Authentication
 
@@ -143,6 +169,8 @@ Tokens are loaded from environment variables or a `.env` file. See `.env.example
 | GitHub | `GITHUB_TOKEN` | [Settings → Tokens](https://github.com/settings/tokens) (classic, `repo` scope) |
 | Slack | `SLACK_TOKEN` | [Create app](https://api.slack.com/apps) → OAuth & Permissions → User Token (`xoxp-...`) |
 | Linear | `LINEAR_TOKEN` | [Settings → API](https://linear.app/settings/api) → Personal API keys |
+| Telegram | `TELEGRAM_DC`, `TELEGRAM_AUTH_KEY` | Notula Collect's Telegram sign-in window |
+| Gmail | `GOOGLE_TOKEN` | A Google OAuth token with the `gmail.readonly` scope |
 | Google Docs | `GOOGLE_TOKEN` | Service account, gcloud CLI, or [OAuth playground](https://developers.google.com/oauthplayground) |
 | Notion | `NOTION_TOKEN` | [My integrations](https://www.notion.so/my-integrations) → Create integration (`ntn_...`) |
 

@@ -5,7 +5,7 @@ from pathlib import Path
 @click.group()
 @click.pass_context
 def cli(ctx):
-    """Export GitHub, Slack, Linear, Google Docs, and Notion data to local Markdown files."""
+    """Export GitHub, Slack, Telegram, Gmail, Linear, Google Docs, and Notion data to local Markdown files."""
     ctx.ensure_object(dict)
 
 
@@ -93,6 +93,73 @@ def add_slack(name, output, token, channel, days, dms):
         "dms": dms,
     })
     click.echo(f"Added Slack export '{name}' -> {out}")
+
+
+@add.command("telegram")
+@click.option("--name", "-n", required=True, help="Name for this export")
+@click.option("--output", "-o", type=click.Path(), required=True, help="Output directory")
+@click.option("--chat", "-c", multiple=True, help="Chats by @username, t.me link or title (default: all)")
+@click.option("--days", type=int, default=14, help="Days of history on the first run (default: 14)")
+@click.option("--dms/--no-dms", default=False, help="Include private chats")
+def add_telegram(name, output, chat, days, dms):
+    """Add a Telegram export.
+
+    Reads with your own account over MTProto. The session comes from the
+    TELEGRAM_DC and TELEGRAM_AUTH_KEY environment variables, which Notula
+    Collect sets from its Telegram sign-in window; nothing is stored here.
+
+    \b
+    Examples:
+      mdexport add telegram -n my-telegram -o ./telegram
+      mdexport add telegram -n my-telegram -o ./telegram -c @durov --days 30 --dms
+    """
+    from mdexport.registry import register
+
+    out = str(Path(output).resolve())
+
+    register(name, {
+        "type": "telegram",
+        "output": out,
+        "chats": list(chat) if chat else None,
+        "days": days,
+        "dms": dms,
+    })
+    click.echo(f"Added Telegram export '{name}' -> {out}")
+
+
+@add.command("gmail")
+@click.option("--name", "-n", required=True, help="Name for this export")
+@click.option("--output", "-o", type=click.Path(), required=True, help="Output directory")
+@click.option("--search", "-q", help="Gmail search (default: your mailbox without spam and trash)")
+@click.option("--days", type=int, default=14, help="Days of history on the first run (default: 14)")
+@click.option("--token", envvar="GOOGLE_TOKEN", help="Google OAuth access token")
+def add_gmail(name, output, search, days, token):
+    """Add a Gmail export.
+
+    Exports mail threads a Gmail search finds, one Markdown file per thread.
+    Needs a Google sign-in with the gmail.readonly scope, which Notula Collect
+    refreshes before every run.
+
+    \b
+    Examples:
+      mdexport add gmail -n my-mail -o ./mail
+      mdexport add gmail -n my-mail -o ./mail -q "label:clients OR from:boss@acme.com" --days 90
+    """
+    from mdexport.registry import register
+
+    out = str(Path(output).resolve())
+
+    cfg = {
+        "type": "gmail",
+        "output": out,
+        "search": search or None,
+        "days": days,
+    }
+    if token:
+        cfg["token"] = token
+
+    register(name, cfg)
+    click.echo(f"Added Gmail export '{name}' -> {out}")
 
 
 @add.command("linear")
@@ -237,6 +304,13 @@ def _describe_source(cfg: dict) -> str:
         if channels:
             return f"{len(channels)} channels"
         return "all channels"
+    elif t == "telegram":
+        chats = cfg.get("chats")
+        if chats:
+            return f"{len(chats)} chats"
+        return "all chats"
+    elif t == "gmail":
+        return cfg.get("search") or "whole mailbox"
     elif t == "linear":
         teams = cfg.get("teams")
         if teams:
@@ -284,6 +358,15 @@ def info(name):
         channels = cfg.get("channels")
         click.echo(f"Channels: {', '.join(channels) if channels else 'all public'}")
         click.echo(f"Days:    {cfg.get('days', 90)}")
+    elif cfg["type"] == "telegram":
+        chats = cfg.get("chats")
+        click.echo(f"Chats:   {', '.join(chats) if chats else 'all'}")
+        click.echo(f"Days:    {cfg.get('days', 14)}")
+        click.echo(f"DMs:     {'yes' if cfg.get('dms') else 'no'}")
+        click.echo(f"Account: {cfg.get('account') or 'signed in from Notula Collect'}")
+    elif cfg["type"] == "gmail":
+        click.echo(f"Search:  {cfg.get('search') or 'whole mailbox'}")
+        click.echo(f"Days:    {cfg.get('days', 14)}")
     elif cfg["type"] == "linear":
         teams = cfg.get("teams")
         click.echo(f"Teams:   {', '.join(teams) if teams else 'all'}")
@@ -483,6 +566,29 @@ def _sync_one(name: str, cfg: dict):
             channels=cfg.get("channels"),
             days=cfg.get("days", 90),
             dms=cfg.get("dms", False),
+        )
+
+    elif t == "telegram":
+        import os
+        dc, key = os.environ.get("TELEGRAM_DC"), os.environ.get("TELEGRAM_AUTH_KEY")
+        if not dc or not key:
+            raise click.ClickException("No Telegram session for this export. Sign in again.")
+        from mdexport.telegram import export_telegram
+        export_telegram(
+            int(dc), key, out,
+            name=name,
+            chats=cfg.get("chats"),
+            days=cfg.get("days", 14),
+            dms=cfg.get("dms", False),
+        )
+
+    elif t == "gmail":
+        from mdexport.gmail import export_gmail
+        export_gmail(
+            cfg, out,
+            search=cfg.get("search"),
+            days=cfg.get("days", 14),
+            since=since,
         )
 
     elif t == "linear":
