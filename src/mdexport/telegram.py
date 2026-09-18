@@ -154,11 +154,14 @@ def _me(client):
     from telethon.errors import RPCError
 
     try:
-        return client.get_me()
+        me = client.get_me()
     except RPCError as e:
         if _is_signed_out(e):
             raise click.ClickException(f"{SIGNED_OUT} ({type(e).__name__})")
         raise click.ClickException(f"Telegram refused the session: {e}")
+    if me is None:
+        raise click.ClickException(f"{SIGNED_OUT} (the session belongs to no account)")
+    return me
 
 
 def _is_signed_out(e) -> bool:
