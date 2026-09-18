@@ -404,6 +404,30 @@ def info(name):
     click.echo(f"Token:   {'configured' if cfg.get('token') else 'missing'}")
 
 
+# --- chats ---
+
+@cli.command("chats")
+@click.argument("name")
+def chats(name):
+    """Print the chats a Telegram export can read, as JSON."""
+    import json
+    import os
+    from mdexport.registry import get
+
+    cfg = get(name)
+    if not cfg:
+        raise click.ClickException(f"Export '{name}' not found. Run 'mdexport list'.")
+    if cfg["type"] != "telegram":
+        raise click.ClickException("chats is only for telegram exports.")
+    dc, key = os.environ.get("TELEGRAM_DC"), os.environ.get("TELEGRAM_AUTH_KEY")
+    if not dc or not key:
+        raise click.ClickException("No Telegram session for this export. Sign in again.")
+
+    from mdexport.telegram import list_chats
+
+    click.echo(json.dumps(list_chats(int(dc), key)))
+
+
 # --- auth ---
 
 @cli.command("auth")

@@ -144,6 +144,31 @@ def _export_chat(client, dialog, out: Path, days: int) -> int:
     return len(messages)
 
 
+def list_chats(dc: int, auth_key: str) -> list[dict]:
+    from telethon.errors import AuthKeyNotFound, UnauthorizedError
+
+    client = _client(dc, auth_key)
+    try:
+        client.connect()
+        if not client.is_user_authorized():
+            raise click.ClickException(SIGNED_OUT)
+        chats = []
+        for dialog in client.iter_dialogs():
+            if not (dialog.is_user or dialog.is_group or dialog.is_channel):
+                continue
+            username = getattr(dialog.entity, "username", None)
+            chats.append({
+                "title": dialog.name or str(dialog.id),
+                "username": f"@{username}" if username else "",
+                "kind": "dm" if dialog.is_user else "group" if dialog.is_group else "channel",
+            })
+        return chats
+    except (AuthKeyNotFound, UnauthorizedError):
+        raise click.ClickException(SIGNED_OUT)
+    finally:
+        client.disconnect()
+
+
 def export_telegram(dc: int, auth_key: str, out: Path, *, name: str | None = None, chats: list[str] | None = None, days: int = 14, dms: bool = False):
     from telethon.errors import AuthKeyNotFound, FloodWaitError, UnauthorizedError
 
