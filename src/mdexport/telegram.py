@@ -18,6 +18,7 @@ DC_ADDRESSES = {
 }
 
 SIGNED_OUT = "Telegram signed you out of this account."
+SIGNED_OUT_ERRORS = {"AuthKeyUnregisteredError", "AuthKeyInvalidError", "AuthKeyPermEmptyError", "AuthKeyDuplicatedError", "SessionRevokedError", "SessionExpiredError", "UserDeactivatedError", "UserDeactivatedBanError", "UnauthorizedError"}
 
 ID_MARKER = re.compile(r"<!-- id:(\d+) -->")
 DAY_HEADING = re.compile(r"^## (\d{4}-\d{2}-\d{2})$", re.MULTILINE)
@@ -144,14 +145,35 @@ def _export_chat(client, dialog, out: Path, days: int) -> int:
     return len(messages)
 
 
+def _me(client):
+    """Ask who the session belongs to, letting Telegram's own error through.
+
+    is_user_authorized() swallows every RPCError, so an api_id problem and a
+    dead session both read as signed out.
+    """
+    from telethon.errors import RPCError
+
+    try:
+        return client.get_me()
+    except RPCError as e:
+        if _is_signed_out(e):
+            raise click.ClickException(SIGNED_OUT)
+        raise click.ClickException(f"Telegram refused the session: {e}")
+
+
+def _is_signed_out(e) -> bool:
+    name = type(e).__name__
+    message = str(getattr(e, "message", "") or e).upper()
+    return name in SIGNED_OUT_ERRORS or any(word in message for word in ("AUTH_KEY", "SESSION_REVOKED", "SESSION_EXPIRED", "USER_DEACTIVATED", "UNAUTHORIZED"))
+
+
 def list_chats(dc: int, auth_key: str) -> list[dict]:
     from telethon.errors import AuthKeyNotFound, UnauthorizedError
 
     client = _client(dc, auth_key)
     try:
         client.connect()
-        if not client.is_user_authorized():
-            raise click.ClickException(SIGNED_OUT)
+        _me(client)
         chats = []
         for dialog in client.iter_dialogs():
             if not (dialog.is_user or dialog.is_group or dialog.is_channel):
@@ -179,10 +201,7 @@ def export_telegram(dc: int, auth_key: str, out: Path, *, name: str | None = Non
 
     try:
         client.connect()
-        if not client.is_user_authorized():
-            raise click.ClickException(SIGNED_OUT)
-
-        me = client.get_me()
+        me = _me(client)
         account = " ".join(filter(None, [me.first_name, me.last_name])) or me.username or ""
         if me.phone:
             account = f"{account}, +{me.phone}" if account else f"+{me.phone}"
