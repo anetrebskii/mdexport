@@ -84,6 +84,40 @@ def _media_line(message) -> str:
     return "\n> Attachment"
 
 
+_CUSTOM_EMOJI: dict[int, str] = {}
+
+
+def _learn_custom(client, ids: list[int]) -> None:
+    from telethon.errors import RPCError
+    from telethon.tl.functions.messages import GetCustomEmojiDocumentsRequest
+    from telethon.tl.types import DocumentAttributeCustomEmoji
+
+    missing = [i for i in ids if i not in _CUSTOM_EMOJI]
+    if not missing:
+        return
+    for i in missing:
+        _CUSTOM_EMOJI[i] = ""
+    try:
+        for doc in client(GetCustomEmojiDocumentsRequest(document_id=missing)):
+            alt = next((a.alt for a in doc.attributes if isinstance(a, DocumentAttributeCustomEmoji)), "")
+            _CUSTOM_EMOJI[doc.id] = alt
+    except RPCError:
+        pass
+
+
+def _reactions_line(client, message) -> str:
+    results = getattr(getattr(message, "reactions", None), "results", None)
+    if not results:
+        return ""
+    _learn_custom(client, [r.reaction.document_id for r in results if hasattr(r.reaction, "document_id")])
+    parts = []
+    for r in results:
+        emoji = getattr(r.reaction, "emoticon", "") or _CUSTOM_EMOJI.get(getattr(r.reaction, "document_id", 0), "")
+        if emoji:
+            parts.append(f"{emoji} {r.count}")
+    return f"\n> Reactions: {', '.join(parts)}" if parts else ""
+
+
 def _sender(message, chat_title: str) -> str:
     from telethon import utils
 
@@ -93,10 +127,10 @@ def _sender(message, chat_title: str) -> str:
     return utils.get_display_name(sender) or chat_title
 
 
-def _format(message, chat_title: str) -> str:
+def _format(client, message, chat_title: str) -> str:
     when = message.date.astimezone().strftime("%Y-%m-%d %H:%M")
     text = message.text or ""
-    return f"**{_sender(message, chat_title)}** - {when} <!-- id:{message.id} -->\n\n{text}{_media_line(message)}"
+    return f"**{_sender(message, chat_title)}** - {when} <!-- id:{message.id} -->\n\n{text}{_media_line(message)}{_reactions_line(client, message)}"
 
 
 def _last_id(path: Path) -> int:
@@ -137,7 +171,7 @@ def _export_chat(client, dialog, out: Path, days: int) -> int:
         if this_day != day:
             parts.append(f"\n## {this_day}\n")
             day = this_day
-        parts.append(_format(message, title))
+        parts.append(_format(client, message, title))
         parts.append("\n---\n")
 
     with path.open("a", encoding="utf-8") as f:
