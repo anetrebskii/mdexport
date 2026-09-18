@@ -428,6 +428,38 @@ def chats(name):
     click.echo(json.dumps(list_chats(int(dc), key)))
 
 
+# --- threads ---
+
+@cli.command("threads")
+@click.argument("name")
+@click.option("--search", "-q", help="Gmail search to look at instead of the saved one")
+@click.option("--days", type=int, help="Days of history to look at instead of the saved one")
+def threads(name, search, days):
+    """Print the threads a Gmail export would take, as JSON."""
+    import json
+    import os
+    from mdexport.registry import get
+
+    cfg = get(name)
+    if not cfg:
+        raise click.ClickException(f"Export '{name}' not found. Run 'mdexport list'.")
+    if cfg["type"] != "gmail":
+        raise click.ClickException("threads is only for gmail exports.")
+
+    token = os.environ.get("GOOGLE_TOKEN")
+    if token:
+        cfg = {**cfg, "token": token}
+
+    from mdexport.gmail import list_threads
+
+    found = list_threads(
+        cfg,
+        search=search if search is not None else cfg.get("search"),
+        days=days if days is not None else cfg.get("days", 14),
+    )
+    click.echo(json.dumps(found))
+
+
 # --- auth ---
 
 @cli.command("auth")

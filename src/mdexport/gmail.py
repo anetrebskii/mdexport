@@ -147,6 +147,34 @@ def _query(search: str | None, days: int, since: str | None) -> str:
     return " ".join(parts)
 
 
+def list_threads(cfg: dict, *, search: str | None = None, days: int = 14, limit: int = 50) -> dict:
+    service = build("gmail", "v1", credentials=_credentials(cfg), cache_discovery=False)
+    query = _query(search, days, None)
+
+    ids = []
+    page = None
+    while True:
+        reply = _call(service.users().threads().list(userId="me", q=query, maxResults=100, pageToken=page))
+        ids.extend(t["id"] for t in reply.get("threads", []))
+        page = reply.get("nextPageToken")
+        if not page or len(ids) >= 500:
+            break
+
+    threads = []
+    for thread_id in ids[:limit]:
+        thread = _call(service.users().threads().get(userId="me", id=thread_id, format="metadata", metadataHeaders=["Subject", "From"]))
+        messages = thread.get("messages", [])
+        if not messages:
+            continue
+        threads.append({
+            "subject": _header(messages[0], "subject") or "(no subject)",
+            "from": _header(messages[-1], "from"),
+            "day": _thread_date(thread).strftime("%Y-%m-%d"),
+            "messages": len(messages),
+        })
+    return {"query": query, "total": len(ids), "more": len(ids) > limit, "threads": threads}
+
+
 def export_gmail(cfg: dict, out: Path, *, search: str | None = None, days: int = 14, since: str | None = None):
     service = build("gmail", "v1", credentials=_credentials(cfg), cache_discovery=False)
     out.mkdir(parents=True, exist_ok=True)
