@@ -160,6 +160,34 @@ mdexport sync --dry-run
 
 GitHub, Telegram, Gmail, Linear, Google Docs, and Notion support incremental sync — only new/updated items are fetched after the first full sync.
 
+### `mdexport export slack` — One-off Slack export
+
+```bash
+SLACK_TOKEN=xoxb-... mdexport export slack --output ./slack --report ./slack-report.json
+
+# Less history, skip some channels and users
+SLACK_TOKEN=xoxb-... mdexport export slack -o ./slack --report ./slack-report.json \
+  --history-days 90 --refetch-days 7 --exclude random --exclude C0123ABCD --exclude-user U0456EFGH
+```
+
+Options: `--history-days` days read on a channel's first run (default: 365), `--refetch-days` recent days read again on every run to pick up edits, deletions and late thread replies (default: 14, at most `--history-days`), `--exclude` channel id or name without `#` (repeatable), `--exclude-user` user id (repeatable), `--report` file for the JSON report (required).
+
+Exports every channel the token's bot is a member of; the bot never joins a channel by itself, so invite it where it should read. The token comes only from `SLACK_TOKEN` and is never printed or stored. A bot token (`xoxb-...`) needs `channels:read`, `groups:read`, `channels:history`, `groups:history` and `users:read`. The bot's own messages are always left out. Nothing is read from or written to `~/.mdexport/registry.json`.
+
+Writes one file per channel per UTC day, `OUTPUT/<channel id>/<YYYY-MM-DD>.md`, with a link to every message, and a cursor per channel in `OUTPUT/.state/`. **The output directory is dedicated to this export:** each run deletes the folders named like a channel id (`C…`/`G…`) that the bot is no longer in or that are excluded. When a run keeps no channel at all (wrong workspace, bot removed everywhere), nothing is deleted.
+
+On success the report is written to `--report` and one line is printed:
+
+```json
+{"channels": 2, "messages": 120, "removed": ["C0OLD1234"], "unreadable": {"C0789IJKL": "ratelimited"}}
+```
+
+```
+Exported 2 channels, 120 messages, 1 unreadable
+```
+
+A channel that cannot be read is listed under `unreadable` and keeps its earlier files. A run that keeps no channel adds `"removal_skipped": true` to the report and `; removal skipped: no channels kept` to the line. If the workspace, its users or its channels cannot be listed, the command exits 1, writes no report and changes nothing.
+
 ## Authentication
 
 Tokens are loaded from environment variables or a `.env` file. See `.env.example` for all options.

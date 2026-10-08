@@ -275,6 +275,72 @@ def add_notion(name, output, token, page, database):
     click.echo(f"Added Notion export '{name}' -> {out}")
 
 
+# --- export ---
+
+@cli.group("export")
+def export_group():
+    """Run a one-off export configured by options and the environment, with no registry."""
+
+
+@export_group.command("slack")
+@click.option("--output", "-o", type=click.Path(file_okay=False, path_type=Path), required=True,
+              help="Output directory, dedicated to this export: folders of channels the bot is no longer in are deleted")
+@click.option("--history-days", type=int, default=365, show_default=True,
+              help="Days of history read on a channel's first run")
+@click.option("--refetch-days", type=int, default=14, show_default=True,
+              help="Recent days read again on every run, for edits, deletions and late thread replies")
+@click.option("--exclude", multiple=True, help="Channel id or name (without #) to skip; repeatable")
+@click.option("--exclude-user", multiple=True, help="User id whose messages are left out; repeatable")
+@click.option("--report", type=click.Path(dir_okay=False, path_type=Path), required=True,
+              help="File the run's JSON report is written to")
+def export_slack(output, history_days, refetch_days, exclude, exclude_user, report):
+    """Export every Slack channel the token's bot is in, one Markdown file per channel per day.
+
+    The token is read only from the SLACK_TOKEN environment variable; a bot
+    token (xoxb-...) needs channels:read, groups:read, channels:history,
+    groups:history and users:read. The bot never joins a channel by itself.
+
+    \b
+    Writes OUTPUT/<channel id>/<YYYY-MM-DD>.md and a cursor per channel in
+    OUTPUT/.state/. Folders named like a channel id that the bot is no longer
+    in, or that are excluded, are deleted; nothing is deleted when no channel
+    is kept.
+
+    \b
+    Examples:
+      SLACK_TOKEN=xoxb-... mdexport export slack -o ./slack --report report.json
+      SLACK_TOKEN=xoxb-... mdexport export slack -o ./slack --report report.json --exclude random --history-days 90
+    """
+    import json
+    import os
+    from mdexport import slack_export
+
+    if history_days < 1 or refetch_days < 1:
+        raise click.ClickException("--history-days and --refetch-days must be at least 1")
+    if refetch_days > history_days:
+        raise click.ClickException("--refetch-days must be at most --history-days")
+    token = os.environ.get("SLACK_TOKEN")
+    if not token:
+        raise click.ClickException("SLACK_TOKEN is not set")
+
+    try:
+        result = slack_export.export(
+            slack_export.make_client(token), output,
+            history_days=history_days,
+            refetch_days=refetch_days,
+            exclude=exclude,
+            exclude_users=exclude_user,
+        )
+    except slack_export.ExportError as e:
+        raise click.ClickException(str(e)) from e
+
+    slack_export._write_atomic(report, json.dumps(result, indent=2) + "\n")
+    summary = f"Exported {result['channels']} channels, {result['messages']} messages, {len(result['unreadable'])} unreadable"
+    if result.get("removal_skipped"):
+        summary += "; removal skipped: no channels kept"
+    click.echo(summary)
+
+
 # --- list ---
 
 @cli.command("list")
