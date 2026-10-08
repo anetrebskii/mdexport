@@ -13,7 +13,7 @@ pip install -e .          # Install in development mode
 mdexport --help           # CLI entry point (mdexport.cli:cli)
 ```
 
-There are no tests, linter, or CI configured.
+Tests: `pip install -e '.[dev]'` then `pytest` (`tests/` covers `slack_export.py` and `mdexport export slack`). No linter or CI.
 
 ## Architecture
 
@@ -23,6 +23,7 @@ All source code lives in `src/mdexport/`. The codebase is small (~8 files):
 - **registry.py** — JSON config persistence at `~/.mdexport/registry.json` (register/unregister/get/update_synced)
 - **github.py** — Exports issues, PRs, and wiki using PyGithub. Wiki is cloned via git subprocess.
 - **slack.py** — Exports channel messages using slack-sdk. Resolves user IDs to names, supports date-range filtering.
+- **slack_export.py** — Stateless `mdexport export slack`: one Markdown file per channel per UTC day with permalinks, a cursor per channel in `.state/`, a JSON report; token only from `SLACK_TOKEN`, no registry.
 - **telegram.py** — Exports chats, groups and channels with Telethon, using an auth key and DC number from the environment (`TELEGRAM_DC`, `TELEGRAM_AUTH_KEY`). One file per chat, incremental by the `<!-- id:N -->` markers it writes.
 - **gmail.py** — Exports mail threads a Gmail search finds, via the Gmail API. One file per thread, incremental by `after:` on the last sync.
 - **linear.py** — Exports team issues with comments and history via GraphQL (httpx).

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "mdexport"
-version = "0.1.0"
+version = "0.2.0"
 description = "Export GitHub issues/PRs, Slack and Telegram messages, Gmail threads, Linear issues, Notion pages and Google Docs to local Markdown files"
 requires-python = ">=3.11"
 dependencies = [
@@ -18,8 +18,14 @@ dependencies = [
     "telethon>=1.36",
 ]
 
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
 [project.scripts]
 mdexport = "mdexport.cli:cli"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/mdexport"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
