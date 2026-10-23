@@ -409,6 +409,60 @@ def export_notion(output, exclude, report):
     click.echo(summary)
 
 
+@export_group.command("linear")
+@click.option("--output", "-o", type=click.Path(file_okay=False, path_type=Path), required=True,
+              help="Output directory, dedicated to this export: files of tasks no longer listed or excluded are deleted")
+@click.option("--exclude", multiple=True, help="Team key (WF) or task id (FOR-123) to skip; repeatable")
+@click.option("--report", type=click.Path(dir_okay=False, path_type=Path), required=True,
+              help="File the run's JSON report is written to")
+def export_linear(output, exclude, report):
+    """Export every task of every public Linear team, one Markdown file per task.
+
+    The token is read only from the LINEAR_TOKEN environment variable; a
+    personal API key reads what its user can see. Only public teams are
+    collected, and the private teams skipped are named in the report.
+    Archived tasks are kept; trashed tasks are left out.
+
+    \b
+    Writes OUTPUT/<team key>/<task id>.md, a folder per team, rewriting a
+    file only when its text changed; no state is kept. A task no longer
+    listed, trashed, in a private team or excluded has its file deleted, and
+    a team folder is removed once empty. Only names shaped like a team key or
+    task id are deleted, and nothing is deleted in a run that keeps no task.
+
+    \b
+    Examples:
+      LINEAR_TOKEN=lin_api_... mdexport export linear -o ./linear --report report.json
+      LINEAR_TOKEN=lin_api_... mdexport export linear -o ./linear --report report.json --exclude WF --exclude FOR-123
+    """
+    import json
+    import os
+    from mdexport import linear_export, slack_export
+
+    values = [value.upper() for value in exclude]
+    for typed, value in zip(exclude, values):
+        if not linear_export.EXCLUDE.fullmatch(value):
+            raise click.ClickException(f"--exclude must be a Linear team key or task id: {typed}")
+    token = os.environ.get("LINEAR_TOKEN")
+    if not token:
+        raise click.ClickException("LINEAR_TOKEN is not set")
+
+    client = linear_export.make_client(token)
+    try:
+        result = linear_export.export(client, output, exclude=values)
+    except linear_export.ExportError as e:
+        raise click.ClickException(str(e)) from e
+    finally:
+        client.close()
+
+    slack_export._write_atomic(report, json.dumps(result, indent=2) + "\n")
+    summary = (f"Exported {result['teams']} teams, {result['issues']} tasks ({result['written']} written), "
+               f"{result['comments']} comments")
+    if result.get("removal_skipped"):
+        summary += "; removal skipped: no tasks kept"
+    click.echo(summary)
+
+
 def _places(place: tuple) -> dict:
     places = {}
     for item in place:

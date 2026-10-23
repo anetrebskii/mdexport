@@ -236,6 +236,36 @@ Exported 12 roots, 340 pages (18 read), 1 unreadable
 
 `roots` and `pages` count what is kept, `sections` the `##` items in kept files, `read` the pages read this run, `removed` the roots whose pages were all removed this run (a folder still holding other files stays on disk), `pages_removed` the page files deleted. A page that cannot be read is listed under `unreadable` and keeps its earlier file. A run that keeps no page deletes nothing and adds `"removal_skipped": true` to the report and `; removal skipped: no roots kept` to the line. If the shared pages or databases cannot be listed, the command exits 1, writes no report and changes nothing.
 
+### `mdexport export linear` — One-off Linear export
+
+```bash
+LINEAR_TOKEN=lin_api_... mdexport export linear --output ./linear --report ./linear-report.json
+
+# Skip a whole team and a single task
+LINEAR_TOKEN=lin_api_... mdexport export linear -o ./linear --report ./linear-report.json \
+  --exclude WF --exclude FOR-123
+```
+
+Options: `--exclude` team key (`WF`) or task id (`FOR-123`), any case (repeatable), `--report` file for the JSON report (required).
+
+Exports every task of every public team the key can see, archived tasks included and trashed ones left out, with all its comments and replies. Private teams are never collected; the report names the ones skipped. The token comes only from `LINEAR_TOKEN` (a personal API key, see [Authentication](#authentication)) and is never printed or stored. Nothing is read from or written to `~/.mdexport/registry.json`.
+
+Writes one file per task, `OUTPUT/<team key>/<task id>.md`, in a folder per team. The file opens with the task's title line, then a `##` passage holding its metadata (status, assignee, team, project, cycle, labels, dates, parent, sub-tasks, related tasks, attached links) and the description up to its first heading, then one passage per top-level description heading and one per comment, each with its link on the next line. Every run reads every task and rewrites only the files whose text changed; no state is kept. **The output directory is dedicated to this export:** a task that is no longer listed, is trashed, is in a private team or is excluded has its file deleted, and a team folder is removed once it is empty. Only names shaped like a team key or task id are ever deleted, and nothing is deleted in a run that keeps no task.
+
+On success the report is written to `--report` and one line is printed:
+
+```json
+{"teams": 3, "issues": 1790, "comments": 4210, "sections": 7400, "written": 12, "removed": ["FOR-88"],
+ "unreadable": {}, "removal_skipped": false, "skipped_private_teams": ["OPS"], "excluded": ["WF"],
+ "finished_at": "2026-10-23T03:30:12Z"}
+```
+
+```
+Exported 3 teams, 1790 tasks (12 written), 4210 comments
+```
+
+`teams`, `issues` and `comments` count what is kept, `sections` the `##` passages in kept files, `written` the files written this run, `removed` the task ids whose files were deleted, `skipped_private_teams` the private team keys left out, `excluded` the `--exclude` values that matched a listed team or task, and `finished_at` the run's end in UTC. A task that cannot be rendered, or whose team key or id is not shaped as expected, is listed under `unreadable`; one that fails to render keeps its earlier file. A run that keeps no task adds `"removal_skipped": true` to the report and `; removal skipped: no tasks kept` to the line. If the teams or tasks cannot be listed, the command exits 1 with `Linear listing failed: <code>`, writes no report and changes nothing.
+
 ## Authentication
 
 Tokens are loaded from environment variables or a `.env` file. See `.env.example` for all options.

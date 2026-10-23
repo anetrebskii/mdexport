@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "mdexport"
-version = "0.4.0"
+version = "0.5.1"
 description = "Export GitHub issues/PRs, Slack and Telegram messages, Gmail threads, Linear issues, Notion pages and Google Docs to local Markdown files"
 requires-python = ">=3.11"
 dependencies = [

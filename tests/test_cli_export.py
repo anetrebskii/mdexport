@@ -6,10 +6,12 @@ from click.testing import CliRunner
 from slack_sdk import WebClient
 from slack_sdk.http_retry.builtin_handlers import RateLimitErrorRetryHandler, ServerErrorRetryHandler
 
-from mdexport import notion_export, slack_export
+from mdexport import linear_export, notion_export, slack_export
 from mdexport.cli import cli
+from mdexport.linear_client import LinearError
 from mdexport.notion_client import NotionError
 
+from .fake_linear import FakeLinear
 from .fake_notion import FakeNotion
 from .fake_slack import FakeClient
 
@@ -277,5 +279,110 @@ def test_notion_help():
     result = CliRunner().invoke(cli, ["export", "notion", "--help"])
     assert result.exit_code == 0
     for text in ("--output", "--exclude", "--report", "NOTION_TOKEN", "OUTPUT/.state/", "dedicated", "shared"):
+        assert text in result.output
+    assert "--token" not in result.output
+
+
+LINEAR_TOKEN = "lin_api_test_1"
+LINEAR_KEYS = {"teams", "issues", "comments", "sections", "written", "removed", "unreadable", "removal_skipped",
+               "skipped_private_teams", "excluded", "finished_at"}
+
+
+def linear_zeros(**fields) -> dict:
+    return {"teams": 0, "issues": 0, "comments": 0, "sections": 0, "written": 0, "removed": [], "unreadable": {},
+            "removal_skipped": False, "skipped_private_teams": [], "excluded": [],
+            "finished_at": "2026-10-23T03:30:00Z", **fields}
+
+
+@pytest.fixture
+def linear_env(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("LINEAR_TOKEN", LINEAR_TOKEN)
+    fake, seen = FakeLinear(), []
+    fake.teams_list = [{"key": "FOR", "name": "Formula", "private": False}]
+    fake.issue_list = [{"id": "id-FOR-1", "identifier": "FOR-1", "title": "Fix the hero",
+                        "url": "https://linear.app/formula/issue/FOR-1", "trashed": False,
+                        "team": {"key": "FOR", "name": "Formula"}, "comments": []}]
+    monkeypatch.setattr(linear_export, "make_client", lambda token: seen.append(token) or fake)
+    return fake, seen
+
+
+def invoke_linear(tmp_path, *extra: str):
+    args = ["export", "linear", "--output", str(tmp_path / "out"), "--report", str(tmp_path / "report.json"), *extra]
+    return CliRunner().invoke(cli, args)
+
+
+@pytest.mark.parametrize("unset", [True, False])
+def test_linear_missing_token(tmp_path, linear_env, monkeypatch, unset):
+    if unset:
+        monkeypatch.delenv("LINEAR_TOKEN")
+    else:
+        monkeypatch.setenv("LINEAR_TOKEN", "")
+    result = invoke_linear(tmp_path)
+    assert result.exit_code == 1
+    assert "LINEAR_TOKEN is not set" in result.output
+    assert linear_env[1] == []
+    assert not (tmp_path / "report.json").exists()
+
+
+def test_linear_bad_exclude(tmp_path, linear_env):
+    result = invoke_linear(tmp_path, "--exclude", "FOR-1", "--exclude", "for_1")
+    assert result.exit_code == 1
+    assert "--exclude must be a Linear team key or task id: for_1" in result.output
+    assert linear_env[1] == []
+    assert not (tmp_path / "out").exists()
+    assert not (tmp_path / "report.json").exists()
+
+
+def test_linear_exclude_uppercased_reaches_export(tmp_path, linear_env, monkeypatch):
+    seen = []
+    monkeypatch.setattr(linear_export, "export", lambda client, out, **kw: seen.append(kw) or linear_zeros())
+    result = invoke_linear(tmp_path, "--exclude", "wf", "--exclude", "for-2")
+    assert result.exit_code == 0, result.output
+    assert seen[-1]["exclude"] == ["WF", "FOR-2"]
+
+
+def test_linear_success_writes_report_and_summary(tmp_path, linear_env):
+    fake, seen = linear_env
+    result = invoke_linear(tmp_path)
+    assert result.exit_code == 0, result.output
+    assert result.output == "Exported 1 teams, 1 tasks (1 written), 0 comments\n"
+    report = json.loads((tmp_path / "report.json").read_text())
+    assert set(report) >= LINEAR_KEYS
+    assert (tmp_path / "out" / "FOR" / "FOR-1.md").is_file()
+    assert seen == [LINEAR_TOKEN]
+    assert fake.closed
+    assert LINEAR_TOKEN not in result.output
+    leaked = [p for p in tmp_path.rglob("*") if p.is_file() and LINEAR_TOKEN.encode() in p.read_bytes()]
+    assert leaked == []
+    assert not (tmp_path / ".mdexport").exists()
+    assert not list(tmp_path.glob(".report.json.*"))
+
+
+def test_linear_listing_failure(tmp_path, linear_env):
+    fake, _ = linear_env
+    fake.fail["issues"] = LinearError(401, "AUTHENTICATION_ERROR")
+    result = invoke_linear(tmp_path)
+    assert result.exit_code == 1
+    assert "Linear listing failed: AUTHENTICATION_ERROR" in result.output
+    assert "Traceback" not in result.output
+    assert LINEAR_TOKEN not in result.output
+    assert fake.closed
+    assert not (tmp_path / "report.json").exists()
+
+
+def test_linear_removal_skipped_suffix(tmp_path, linear_env, monkeypatch):
+    monkeypatch.setattr(linear_export, "export", lambda client, out, **kw: linear_zeros(removal_skipped=True))
+    result = invoke_linear(tmp_path)
+    assert result.exit_code == 0, result.output
+    assert result.output == "Exported 0 teams, 0 tasks (0 written), 0 comments; removal skipped: no tasks kept\n"
+    assert json.loads((tmp_path / "report.json").read_text())["removal_skipped"] is True
+
+
+def test_linear_help():
+    result = CliRunner().invoke(cli, ["export", "linear", "--help"])
+    assert result.exit_code == 0
+    for text in ("--output", "--exclude", "--report", "LINEAR_TOKEN", "public", "dedicated",
+                 "OUTPUT/<team key>/<task id>.md"):
         assert text in result.output
     assert "--token" not in result.output
