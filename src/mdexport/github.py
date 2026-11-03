@@ -177,10 +177,14 @@ def _slugify(text: str) -> str:
     return "".join(c for c in slug if c.isalnum() or c == "-")[:60]
 
 
+def connect(token: str, **kwargs) -> Github:
+    """A PyGithub client for `token`, retrying rate limits and server errors with backoff."""
+    return Github(auth=Auth.Token(token), retry=GithubRetry(total=5, backoff_factor=1.0), **kwargs)
+
+
 def export_github(repo_name: str, token: str, out: Path, *, issues=True, prs=True, wiki=True, since: str | None = None):
     click.echo(f"Connecting to GitHub repo: {repo_name}")
-    retry = GithubRetry(total=5, backoff_factor=1.0)
-    g = Github(auth=Auth.Token(token), retry=retry)
+    g = connect(token)
     repo = g.get_repo(repo_name)
     click.echo(f"Repo: {repo.full_name} ({repo.stargazers_count} stars)")
 

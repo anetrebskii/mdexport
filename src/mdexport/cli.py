@@ -463,6 +463,126 @@ def export_linear(output, exclude, report):
     click.echo(summary)
 
 
+@export_group.command("github")
+@click.option("--repo", required=True, help="Repository as owner/name")
+@click.option("--output", "-o", type=click.Path(file_okay=False, path_type=Path), required=True,
+              help="Output directory, dedicated to this export: files of items no longer listed or excluded are deleted")
+@click.option("--issues/--no-issues", default=True, help="Export issues (default: on)")
+@click.option("--prs/--no-prs", default=True, help="Export pull requests (default: on)")
+@click.option("--wiki/--no-wiki", default=True, help="Export the wiki (default: on)")
+@click.option("--exclude", multiple=True, help="Issue or pull request number to skip; repeatable")
+@click.option("--report", type=click.Path(dir_okay=False, path_type=Path), required=True,
+              help="File the run's JSON report is written to")
+def export_github(repo, output, issues, prs, wiki, exclude, report):
+    """Export a GitHub repository's issues, pull requests and wiki, one Markdown file per item.
+
+    The token is read only from the GITHUB_TOKEN environment variable; it
+    needs read access to the repository's issues, pull requests and contents.
+    The wiki is cloned over HTTPS with the token in a header, never in a URL;
+    a repository without a wiki gives no pages.
+
+    \b
+    Writes OUTPUT/issues/<number>.md, OUTPUT/pulls/<number>.md and
+    OUTPUT/wiki/<page>.md, rewriting a file only when its text changed; no
+    state is kept. An item no longer listed or excluded has its file deleted.
+    Only names shaped like the export's own files are deleted, only in a kind
+    that was read and keeps at least one item, and nothing is deleted in a
+    run that keeps no item.
+
+    \b
+    Examples:
+      GITHUB_TOKEN=ghp_... mdexport export github --repo owner/name -o ./github --report report.json
+      GITHUB_TOKEN=ghp_... mdexport export github --repo owner/name -o ./github --report report.json --no-wiki --exclude 42
+    """
+    import json
+    import os
+    from mdexport import github_export, slack_export
+
+    if not github_export.REPO.fullmatch(repo):
+        raise click.ClickException(f"--repo must be owner/name: {repo}")
+    for value in exclude:
+        if not value.isdecimal() or int(value) < 1:
+            raise click.ClickException(f"--exclude must be an issue or pull request number: {value}")
+    token = os.environ.get("GITHUB_TOKEN")
+    if not token:
+        raise click.ClickException("GITHUB_TOKEN is not set")
+
+    client = github_export.make_client(token, repo)
+    try:
+        result = github_export.export(client, output, repo, issues=issues, pulls=prs, wiki=wiki,
+                                      exclude=[int(value) for value in exclude])
+    except github_export.ExportError as e:
+        raise click.ClickException(str(e)) from e
+    finally:
+        client.close()
+
+    slack_export._write_atomic(report, json.dumps(result, indent=2) + "\n")
+    summary = (f"Exported {result['issues']} issues, {result['pulls']} pull requests, {result['wiki_pages']} wiki pages "
+               f"({result['written']} written), {len(result['unreadable'])} unreadable")
+    if result.get("removal_skipped"):
+        summary += "; removal skipped: no items kept"
+    click.echo(summary)
+
+
+@export_group.command("google-docs")
+@click.option("--output", "-o", type=click.Path(file_okay=False, path_type=Path), required=True,
+              help="Output directory, dedicated to this export: files of docs no longer listed or excluded are deleted")
+@click.option("--folder", multiple=True,
+              help="Drive folder id to export with its subfolders; repeatable (default: every doc the account can see)")
+@click.option("--exclude", multiple=True, help="Doc id to skip; repeatable")
+@click.option("--report", type=click.Path(dir_okay=False, path_type=Path), required=True,
+              help="File the run's JSON report is written to")
+def export_google_docs(output, folder, exclude, report):
+    """Export every Google Doc a service account can see, one Markdown file per doc.
+
+    The service account key file's path is read only from the
+    GOOGLE_APPLICATION_CREDENTIALS environment variable, with read-only Drive
+    and Docs scopes. Without --folder every doc the account can see is
+    exported, shared drives included.
+
+    \b
+    Writes OUTPUT/<doc id>.md, rewriting a file only when its text changed;
+    no state is kept. A doc no longer listed or excluded has its file
+    deleted. Only names shaped like a doc id are deleted, and nothing is
+    deleted in a run that keeps no doc.
+
+    \b
+    Examples:
+      GOOGLE_APPLICATION_CREDENTIALS=key.json mdexport export google-docs -o ./gdocs --report report.json
+      GOOGLE_APPLICATION_CREDENTIALS=key.json mdexport export google-docs -o ./gdocs --report report.json --folder 1AbC...
+    """
+    import json
+    import os
+    from mdexport import googledocs_export, slack_export
+
+    for value in folder:
+        if not googledocs_export.FOLDER.fullmatch(value):
+            raise click.ClickException(f"--folder must be a Drive folder id: {value}")
+    for value in exclude:
+        if not googledocs_export.ID.fullmatch(value):
+            raise click.ClickException(f"--exclude must be a Google Doc id: {value}")
+    key_file = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
+    if not key_file:
+        raise click.ClickException("GOOGLE_APPLICATION_CREDENTIALS is not set")
+    try:
+        client = googledocs_export.make_client(key_file)
+    except (OSError, ValueError) as e:
+        raise click.ClickException(
+            f"GOOGLE_APPLICATION_CREDENTIALS: cannot read the service account key ({type(e).__name__})") from e
+
+    try:
+        result = googledocs_export.export(client, output, folders=folder, exclude=exclude)
+    except googledocs_export.ExportError as e:
+        raise click.ClickException(str(e)) from e
+
+    slack_export._write_atomic(report, json.dumps(result, indent=2) + "\n")
+    summary = (f"Exported {result['docs']} docs ({result['written']} written), {result['sections']} sections, "
+               f"{len(result['unreadable'])} unreadable")
+    if result.get("removal_skipped"):
+        summary += "; removal skipped: no docs kept"
+    click.echo(summary)
+
+
 def _places(place: tuple) -> dict:
     places = {}
     for item in place:

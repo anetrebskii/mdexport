@@ -13,13 +13,13 @@ pip install -e .          # Install in development mode
 mdexport --help           # CLI entry point (mdexport.cli:cli)
 ```
 
-Tests: `pip install -e '.[dev]'` then `pytest` (`tests/` covers `slack_export.py`, `notion_client.py`, `notion_render.py`, `notion_export.py`, `linear_client.py`, `linear_render.py`, `linear_export.py`, `mdexport export slack`, `mdexport export notion` and `mdexport export linear`; `tests/fake_slack.py`, `tests/fake_notion.py` and `tests/fake_linear.py` stand in for the APIs). No linter or CI.
+Tests: `pip install -e '.[dev]'` then `pytest` (`tests/` covers `slack_export.py`, `notion_client.py`, `notion_render.py`, `notion_export.py`, `linear_client.py`, `linear_render.py`, `linear_export.py`, `github_export.py`, `googledocs_export.py`, `mdexport export slack`, `mdexport export notion`, `mdexport export linear`, `mdexport export github` and `mdexport export google-docs`; `tests/fake_slack.py`, `tests/fake_notion.py`, `tests/fake_linear.py`, `tests/fake_github.py` and `tests/fake_google_docs.py` stand in for the APIs). No linter or CI.
 
 ## Architecture
 
 All source code lives in `src/mdexport/`. The codebase is small (~15 files):
 
-- **cli.py** — Click CLI commands: `add` (github/slack/telegram/gmail/linear/google-docs/notion), `list`, `info`, `remove`, `sync`, `auth`, `chats`, `threads`, and `export` (slack/notion/linear, no registry)
+- **cli.py** — Click CLI commands: `add` (github/slack/telegram/gmail/linear/google-docs/notion), `list`, `info`, `remove`, `sync`, `auth`, `chats`, `threads`, and `export` (slack/notion/linear/github/google-docs, no registry)
 - **registry.py** — JSON config persistence at `~/.mdexport/registry.json` (register/unregister/get/update_synced)
 - **github.py** — Exports issues, PRs, and wiki using PyGithub. Wiki is cloned via git subprocess.
 - **slack.py** — Exports channel messages using slack-sdk. Resolves user IDs to names, supports date-range filtering.
@@ -28,6 +28,8 @@ All source code lives in `src/mdexport/`. The codebase is small (~15 files):
 - **gmail.py** — Exports mail threads a Gmail search finds, via the Gmail API. One file per thread, incremental by `after:` on the last sync.
 - **linear.py** — Exports team issues with comments and history via GraphQL (httpx).
 - **googledocs.py** — Exports Google Docs as Markdown via Drive API. Supports folder filtering and incremental sync by modifiedTime.
+- **github_export.py** - Stateless `mdexport export github`: issues, pull requests (with reviews and review comments) and wiki pages of one repo as `issues/<n>.md`, `pulls/<n>.md`, `wiki/<page>.md`, a passage per body and comment with its link, the wiki cloned with the token in a git config header from the environment, rewriting only changed files, deletion per kind of items no longer listed or excluded, a JSON report; token only from `GITHUB_TOKEN`, no registry.
+- **googledocs_export.py** - Stateless `mdexport export google-docs`: every doc a service account sees, or every doc under `--folder` ids, as `<doc id>.md` with a passage per heading section, rewriting only changed files, deletion of docs no longer listed or excluded, a JSON report; key file path only from `GOOGLE_APPLICATION_CREDENTIALS`, read-only scopes, no registry.
 - **notion.py** — Exports Notion pages as Markdown via REST API (httpx). Converts blocks to MD, supports page/database filtering and incremental sync by last_edited_time.
 - **notion_client.py** — Small Notion REST client over httpx (`Notion-Version: 2022-06-28`), at most 3 calls per second, retrying 429, 5xx and network errors; failures raise `NotionError` with Notion's code, never the token.
 - **notion_render.py** — Renders a Notion page and its blocks as Markdown: a `##` item per heading with its link on the next line, database-row properties, the Slack line escape, no code fences.

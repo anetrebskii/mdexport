@@ -266,6 +266,62 @@ Exported 3 teams, 1790 tasks (12 written), 4210 comments
 
 `teams`, `issues` and `comments` count what is kept, `sections` the `##` passages in kept files, `written` the files written this run, `removed` the task ids whose files were deleted, `skipped_private_teams` the private team keys left out, `excluded` the `--exclude` values that matched a listed team or task, and `finished_at` the run's end in UTC. A task that cannot be rendered, or whose team key or id is not shaped as expected, is listed under `unreadable`; one that fails to render keeps its earlier file. A run that keeps no task adds `"removal_skipped": true` to the report and `; removal skipped: no tasks kept` to the line. If the teams or tasks cannot be listed, the command exits 1 with `Linear listing failed: <code>`, writes no report and changes nothing.
 
+### `mdexport export github` — One-off GitHub export
+
+```bash
+GITHUB_TOKEN=ghp_... mdexport export github --repo owner/name --output ./github --report ./github-report.json
+
+# Issues only, skipping two numbers
+GITHUB_TOKEN=ghp_... mdexport export github --repo owner/name -o ./github --report ./github-report.json \
+  --no-prs --no-wiki --exclude 12 --exclude 345
+```
+
+Options: `--repo owner/name` (required), `--issues/--no-issues`, `--prs/--no-prs`, `--wiki/--no-wiki` (all on by default), `--exclude` issue or pull request number (repeatable), `--report` file for the JSON report (required).
+
+Exports every issue and pull request of the repository, open and closed, with their comments; pull requests also carry their reviews and review comments. The wiki is cloned over HTTPS with the token sent in an HTTP header through git's environment, never in a URL or on the command line; a repository with no wiki gives 0 pages. The token comes only from `GITHUB_TOKEN` and is never printed or stored. Nothing is read from or written to `~/.mdexport/registry.json`.
+
+Writes `OUTPUT/issues/<number>.md`, `OUTPUT/pulls/<number>.md` and `OUTPUT/wiki/<page>.md`. An issue or pull request file has a `##` passage for its metadata (state, author, labels, branches, dates) and body, then one passage per comment, review and review comment in time order, each heading followed by its GitHub link. A wiki page has one passage per top-level heading section, each followed by the page's link. Every run reads everything and rewrites only the files whose text changed; no state is kept. **The output directory is dedicated to this export:** an item no longer listed or excluded has its file deleted. Only names shaped like the export's own files are deleted, only in a kind (issues, pulls, wiki) that was read this run and keeps at least one file, and nothing is deleted in a run that keeps no item. Each run reads the reviews of every pull request with one call per pull request, so a large repository takes a while under GitHub's rate limit.
+
+On success the report is written to `--report` and one line is printed:
+
+```json
+{"repo": "owner/name", "issues": 1800, "pulls": 2300, "wiki_pages": 40, "written": 25, "removed": ["1234"],
+ "unreadable": {}, "removal_skipped": false, "finished_at": "2026-11-03T03:30:12Z"}
+```
+
+```
+Exported 1800 issues, 2300 pull requests, 40 wiki pages (25 written), 0 unreadable
+```
+
+`issues`, `pulls` and `wiki_pages` count what is kept, `written` the files written this run, `removed` the stems of the deleted files, and `finished_at` the run's end in UTC. A pull request whose reviews cannot be read, an item that cannot be rendered, or a wiki page whose name is not a safe file name is listed under `unreadable` as `issues/<n>`, `pulls/<n>` or `wiki/<page>`; the first two keep their earlier file. A run that keeps no item adds `"removal_skipped": true` to the report and `; removal skipped: no items kept` to the line. If the repository, its issues, pull requests or comments, or its wiki cannot be read, the command exits 1 with `GitHub listing failed: <code>`, writes no report and changes nothing.
+
+### `mdexport export google-docs` — One-off Google Docs export
+
+```bash
+GOOGLE_APPLICATION_CREDENTIALS=./key.json mdexport export google-docs --output ./gdocs --report ./gdocs-report.json
+
+# Two folders with their subfolders, skipping one doc
+GOOGLE_APPLICATION_CREDENTIALS=./key.json mdexport export google-docs -o ./gdocs --report ./gdocs-report.json \
+  --folder 1AbC... --folder 0XyZ... --exclude 1DoC...
+```
+
+Options: `--folder` Drive folder id, exported with its subfolders (repeatable; none means every doc the account can see, shared drives included), `--exclude` doc id (repeatable), `--report` file for the JSON report (required).
+
+Authenticates as the service account whose key file path is in `GOOGLE_APPLICATION_CREDENTIALS`, with read-only Drive and Docs scopes. A doc is visible once it, its folder or its shared drive is shared with the service account's email. Nothing is read from or written to `~/.mdexport/registry.json`.
+
+Writes `OUTPUT/<doc id>.md`: a header with the doc's title, URL and last change, then one `##` passage for the text before the first heading and one per top-level heading section, each followed by the doc's URL. Every run exports every doc and rewrites only the files whose text changed; no state is kept. **The output directory is dedicated to this export:** a doc no longer listed or excluded has its file deleted. Only names shaped like a doc id are deleted, and nothing is deleted in a run that keeps no doc.
+
+```json
+{"docs": 120, "sections": 900, "written": 4, "removed": ["1AbC..."], "unreadable": {},
+ "removal_skipped": false, "finished_at": "2026-11-03T03:30:12Z"}
+```
+
+```
+Exported 120 docs (4 written), 900 sections, 0 unreadable
+```
+
+`docs` counts what is kept, `sections` the `##` passages in kept files, `written` the files written this run, and `removed` the ids of the deleted files. A doc that cannot be exported or rendered is listed under `unreadable` and keeps its earlier file. A run that keeps no doc adds `"removal_skipped": true` and `; removal skipped: no docs kept`. If Drive cannot be listed, the command exits 1 with `Google Drive listing failed: <code>`, writes no report and changes nothing.
+
 ## Authentication
 
 Tokens are loaded from environment variables or a `.env` file. See `.env.example` for all options.

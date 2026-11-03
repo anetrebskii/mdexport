@@ -6,11 +6,15 @@ from click.testing import CliRunner
 from slack_sdk import WebClient
 from slack_sdk.http_retry.builtin_handlers import RateLimitErrorRetryHandler, ServerErrorRetryHandler
 
-from mdexport import linear_export, notion_export, slack_export
+from mdexport import github_export, googledocs_export, linear_export, notion_export, slack_export
 from mdexport.cli import cli
+from mdexport.github_export import GitHubError
+from mdexport.googledocs_export import GoogleError
 from mdexport.linear_client import LinearError
 from mdexport.notion_client import NotionError
 
+from .fake_github import FakeGitHub
+from .fake_google_docs import FakeDrive
 from .fake_linear import FakeLinear
 from .fake_notion import FakeNotion
 from .fake_slack import FakeClient
@@ -386,3 +390,189 @@ def test_linear_help():
                  "OUTPUT/<team key>/<task id>.md"):
         assert text in result.output
     assert "--token" not in result.output
+
+
+GITHUB_TOKEN = "ghp_test_token_1"
+GITHUB_KEYS = {"repo", "issues", "pulls", "wiki_pages", "written", "removed", "unreadable", "removal_skipped",
+               "finished_at"}
+
+
+@pytest.fixture
+def github_env(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("GITHUB_TOKEN", GITHUB_TOKEN)
+    fake, seen = FakeGitHub(), []
+    fake.issue_list = [{"number": 1, "title": "Bug", "state": "open", "user": {"login": "alice"},
+                        "html_url": "https://github.com/o/r/issues/1", "body": "broken"}]
+    fake.wiki = {"Home": "Welcome"}
+    monkeypatch.setattr(github_export, "make_client", lambda token, repo: seen.append((token, repo)) or fake)
+    return fake, seen
+
+
+def invoke_github(tmp_path, *extra: str):
+    args = ["export", "github", "--repo", "o/r", "--output", str(tmp_path / "out"),
+            "--report", str(tmp_path / "report.json"), *extra]
+    return CliRunner().invoke(cli, args)
+
+
+@pytest.mark.parametrize("unset", [True, False])
+def test_github_missing_token(tmp_path, github_env, monkeypatch, unset):
+    if unset:
+        monkeypatch.delenv("GITHUB_TOKEN")
+    else:
+        monkeypatch.setenv("GITHUB_TOKEN", "")
+    result = invoke_github(tmp_path)
+    assert result.exit_code == 1
+    assert "GITHUB_TOKEN is not set" in result.output
+    assert github_env[1] == []
+    assert not (tmp_path / "report.json").exists()
+
+
+@pytest.mark.parametrize("args, message", [
+    (("--exclude", "12", "--exclude", "#3"), "--exclude must be an issue or pull request number: #3"),
+    (("--exclude", "0"), "--exclude must be an issue or pull request number: 0"),
+    (("--repo", "o/r/x"), "--repo must be owner/name: o/r/x"),
+])
+def test_github_bad_arguments(tmp_path, github_env, args, message):
+    result = invoke_github(tmp_path, *args)
+    assert result.exit_code == 1
+    assert message in result.output
+    assert github_env[1] == []
+    assert not (tmp_path / "out").exists()
+
+
+def test_github_options_reach_export(tmp_path, github_env, monkeypatch):
+    seen = []
+    monkeypatch.setattr(github_export, "export", lambda client, out, repo, **kw: seen.append((repo, kw)) or {
+        "repo": repo, "issues": 0, "pulls": 0, "wiki_pages": 0, "written": 0, "removed": [], "unreadable": {},
+        "removal_skipped": True, "finished_at": "2026-11-03T03:30:00Z"})
+    result = invoke_github(tmp_path, "--no-prs", "--no-wiki", "--exclude", "7", "--exclude", "12")
+    assert result.exit_code == 0, result.output
+    assert seen == [("o/r", {"issues": True, "pulls": False, "wiki": False, "exclude": [7, 12]})]
+    assert result.output.endswith("; removal skipped: no items kept\n")
+
+
+def test_github_success_writes_report_and_summary(tmp_path, github_env):
+    fake, seen = github_env
+    result = invoke_github(tmp_path)
+    assert result.exit_code == 0, result.output
+    assert result.output == "Exported 1 issues, 0 pull requests, 1 wiki pages (2 written), 0 unreadable\n"
+    report = json.loads((tmp_path / "report.json").read_text())
+    assert set(report) == GITHUB_KEYS
+    assert report["repo"] == "o/r"
+    assert (tmp_path / "out" / "issues" / "1.md").is_file()
+    assert (tmp_path / "out" / "wiki" / "Home.md").is_file()
+    assert seen == [(GITHUB_TOKEN, "o/r")]
+    assert fake.closed
+    leaked = [p for p in tmp_path.rglob("*") if p.is_file() and GITHUB_TOKEN.encode() in p.read_bytes()]
+    assert leaked == []
+    assert not (tmp_path / ".mdexport").exists()
+    assert not list(tmp_path.glob(".report.json.*"))
+
+
+def test_github_listing_failure(tmp_path, github_env):
+    fake, _ = github_env
+    fake.fail["issues"] = GitHubError("401")
+    result = invoke_github(tmp_path)
+    assert result.exit_code == 1
+    assert "GitHub listing failed: 401" in result.output
+    assert "Traceback" not in result.output
+    assert fake.closed
+    assert not (tmp_path / "report.json").exists()
+
+
+def test_github_help():
+    result = CliRunner().invoke(cli, ["export", "github", "--help"])
+    assert result.exit_code == 0
+    for text in ("--repo", "--output", "--issues", "--prs", "--wiki", "--exclude", "--report", "GITHUB_TOKEN",
+                 "OUTPUT/issues/<number>.md", "OUTPUT/pulls/<number>.md", "OUTPUT/wiki/<page>.md"):
+        assert text in result.output
+    assert "--token" not in result.output
+
+
+GDOC = "1AaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaA"
+GOOGLE_KEYS = {"docs", "sections", "written", "removed", "unreadable", "removal_skipped", "finished_at"}
+
+
+@pytest.fixture
+def google_env(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", str(tmp_path / "key.json"))
+    fake, seen = FakeDrive([{"id": GDOC, "name": "Plan"}], {GDOC: "Intro\n# Goals\nship"}), []
+    monkeypatch.setattr(googledocs_export, "make_client", lambda key: seen.append(key) or fake)
+    return fake, seen
+
+
+def invoke_google(tmp_path, *extra: str):
+    args = ["export", "google-docs", "--output", str(tmp_path / "out"), "--report", str(tmp_path / "report.json"),
+            *extra]
+    return CliRunner().invoke(cli, args)
+
+
+@pytest.mark.parametrize("unset", [True, False])
+def test_google_missing_credentials(tmp_path, google_env, monkeypatch, unset):
+    if unset:
+        monkeypatch.delenv("GOOGLE_APPLICATION_CREDENTIALS")
+    else:
+        monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", "")
+    result = invoke_google(tmp_path)
+    assert result.exit_code == 1
+    assert "GOOGLE_APPLICATION_CREDENTIALS is not set" in result.output
+    assert google_env[1] == []
+    assert not (tmp_path / "report.json").exists()
+
+
+def test_google_unreadable_key_file(tmp_path, monkeypatch):
+    monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", str(tmp_path / "missing.json"))
+    result = invoke_google(tmp_path)
+    assert result.exit_code == 1
+    assert "cannot read the service account key (FileNotFoundError)" in result.output
+    assert "Traceback" not in result.output
+
+
+@pytest.mark.parametrize("args, message", [
+    (("--exclude", "short"), "--exclude must be a Google Doc id: short"),
+    (("--folder", "a' or 'b"), "--folder must be a Drive folder id: a' or 'b"),
+])
+def test_google_bad_arguments(tmp_path, google_env, args, message):
+    result = invoke_google(tmp_path, *args)
+    assert result.exit_code == 1
+    assert message in result.output
+    assert google_env[1] == []
+    assert not (tmp_path / "out").exists()
+
+
+def test_google_success_writes_report_and_summary(tmp_path, google_env):
+    fake, seen = google_env
+    result = invoke_google(tmp_path, "--folder", "F1", "--folder", "F2")
+    assert result.exit_code == 0, result.output
+    assert result.output == "Exported 1 docs (1 written), 2 sections, 0 unreadable\n"
+    assert set(json.loads((tmp_path / "report.json").read_text())) == GOOGLE_KEYS
+    assert (tmp_path / "out" / f"{GDOC}.md").is_file()
+    assert seen == [str(tmp_path / "key.json")]
+    assert fake.calls[0] == ("docs", ("F1", "F2"))
+    assert not list(tmp_path.glob(".report.json.*"))
+
+
+def test_google_exclude_and_removal_skipped(tmp_path, google_env):
+    result = invoke_google(tmp_path, "--exclude", GDOC)
+    assert result.exit_code == 0, result.output
+    assert result.output == "Exported 0 docs (0 written), 0 sections, 0 unreadable; removal skipped: no docs kept\n"
+
+
+def test_google_listing_failure(tmp_path, google_env):
+    fake, _ = google_env
+    fake.fail["docs"] = GoogleError("HTTP 403")
+    result = invoke_google(tmp_path)
+    assert result.exit_code == 1
+    assert "Google Drive listing failed: HTTP 403" in result.output
+    assert "Traceback" not in result.output
+    assert not (tmp_path / "report.json").exists()
+
+
+def test_google_help():
+    result = CliRunner().invoke(cli, ["export", "google-docs", "--help"])
+    assert result.exit_code == 0
+    for text in ("--output", "--folder", "--exclude", "--report", "GOOGLE_APPLICATION_CREDENTIALS",
+                 "OUTPUT/<doc id>.md", "shared drives"):
+        assert text in result.output
