@@ -183,7 +183,7 @@ def _export_too_large(error: HttpError) -> bool:
     return error.resp.status == 403 and b"exportSizeLimitExceeded" in error.content
 
 
-def _export_doc_as_md(drive, doc_id: str, title: str) -> str:
+def _export_doc_as_md(drive, doc_id: str, title: str, *, echo: bool = True) -> str:
     """Export as HTML Markdown, falling back to plain text for large docs."""
     try:
         html = drive.files().export(
@@ -193,7 +193,8 @@ def _export_doc_as_md(drive, doc_id: str, title: str) -> str:
     except HttpError as error:
         if not _export_too_large(error):
             raise
-        click.echo(f"  '{title}' exceeds Google's HTML export limit; trying plain text")
+        if echo:
+            click.echo(f"  '{title}' exceeds Google's HTML export limit; trying plain text")
         text = drive.files().export(fileId=doc_id, mimeType="text/plain").execute()
         return text.decode("utf-8").strip() if isinstance(text, bytes) else text.strip()
     if isinstance(html, bytes):
