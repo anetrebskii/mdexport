@@ -322,6 +322,32 @@ Exported 120 docs (4 written), 900 sections, 0 unreadable
 
 `docs` counts what is kept, `sections` the `##` passages in kept files, `written` the files written this run, and `removed` the ids of the deleted files. A doc that cannot be exported or rendered is listed under `unreadable` and keeps its earlier file. A run that keeps no doc adds `"removal_skipped": true` and `; removal skipped: no docs kept`. If Drive cannot be listed, the command exits 1 with `Google Drive listing failed: <code>`, writes no report and changes nothing.
 
+### `mdexport export granola` - One-off Granola export
+
+```bash
+GRANOLA_TOKEN=grn_... mdexport export granola --output ./granola --report ./granola-report.json
+
+# Skip one folder and one meeting
+GRANOLA_TOKEN=grn_... mdexport export granola -o ./granola --report ./granola-report.json --exclude fol_... --exclude not_...
+```
+
+Options: `--exclude` note id (`not_...`) or folder id (`fol_...`), repeatable, `--report` file for the JSON report (required).
+
+The key is read only from `GRANOLA_TOKEN`. A workspace key, made by a Granola admin, reads the workspace's public notes and the spaces whose "Allow access with a workspace API key" is on; a personal key reads its user's notes. Nothing is read from or written to `~/.mdexport/registry.json`.
+
+Writes `OUTPUT/<note id>.md`: a header with the meeting's title, date, Granola link and updated time, a `##` passage with when it was, its owner, people and folders and the start of its summary, one per summary section, then the transcript in passages of about 4,000 characters headed by the time they start, all in UTC. Each passage is followed by the Granola link. The owner's private notes are never written. A meeting is read again only when Granola's updated time differs from the one in its file; no other state is kept. **The output directory is dedicated to this export:** a meeting no longer listed, deleted or excluded has its file deleted. Only names shaped like a note id are deleted, and nothing is deleted in a run that keeps no meeting.
+
+```json
+{"meetings": 6, "read": 1, "written": 1, "removed": [], "unreadable": {},
+ "removal_skipped": false, "excluded": [], "finished_at": "2026-11-09T18:32:56Z"}
+```
+
+```
+Exported 6 meetings (1 read, 1 written), 0 unreadable
+```
+
+`meetings` counts what is kept, `read` the meetings read from Granola this run, `written` the files written, and `removed` the ids of the deleted files. A meeting that cannot be read or rendered is listed under `unreadable` and keeps its earlier file. A run that keeps no meeting adds `"removal_skipped": true` and `; removal skipped: no meetings kept`. If Granola cannot be listed, the command exits 1 with `Granola listing failed: <code>`, writes no report and changes nothing.
+
 ## Authentication
 
 Tokens are loaded from environment variables or a `.env` file. See `.env.example` for all options.

@@ -19,7 +19,7 @@ Tests: `pip install -e '.[dev]'` then `pytest` (`tests/` covers `slack_export.py
 
 All source code lives in `src/mdexport/`. The codebase is small (~15 files):
 
-- **cli.py** — Click CLI commands: `add` (github/slack/telegram/gmail/linear/google-docs/notion), `list`, `info`, `remove`, `sync`, `auth`, `chats`, `threads`, and `export` (slack/notion/linear/github/google-docs, no registry)
+- **cli.py** — Click CLI commands: `add` (github/slack/telegram/gmail/linear/google-docs/notion), `list`, `info`, `remove`, `sync`, `auth`, `chats`, `threads`, and `export` (slack/notion/linear/github/google-docs/granola, no registry)
 - **registry.py** — JSON config persistence at `~/.mdexport/registry.json` (register/unregister/get/update_synced)
 - **github.py** — Exports issues, PRs, and wiki using PyGithub. Wiki is cloned via git subprocess.
 - **slack.py** — Exports channel messages using slack-sdk. Resolves user IDs to names, supports date-range filtering.
@@ -38,6 +38,7 @@ All source code lives in `src/mdexport/`. The codebase is small (~15 files):
 - **linear_render.py** — Renders a Linear task as Markdown: a `##` passage for its metadata and lead text, then one per top-level description heading and one per comment, each with its link on the next line, the Slack line escape, no code fences.
 - **linear_export.py** — Stateless `mdexport export linear`: every task of every public team as `<team key>/<task id>.md`, archived kept and trashed left out, rewriting only files whose text changed, deletion of tasks no longer listed or excluded and of team folders left empty, a JSON report; token only from `LINEAR_TOKEN`, no registry.
 - **granola.py** - Exports Granola meetings (summary, own notes, transcript) via the public API with a `grn_` key. A meeting goes to one of several named places: one chosen for it, else its calendar series' place, else a linked Granola folder's place; otherwise it waits in `pending` until `mdexport granola file` gives it one. `files`, `series`, `notes` and `pending` live in the registry entry, and `output` is the first place.
+- **granola_export.py** - Stateless `mdexport export granola`: every meeting note the key reads as `<note id>.md`, read again only when its updated time changed, the owner's private notes left out, deletion of meetings no longer listed, deleted or excluded, a JSON report; key only from `GRANOLA_TOKEN`, no registry.
 
 Each exporter follows the same pattern: authenticate via env var token → paginate through API → format as markdown → write files. GitHub, Linear, Google Docs, and Notion support incremental sync via `synced_at`.
 

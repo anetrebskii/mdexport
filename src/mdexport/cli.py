@@ -583,6 +583,59 @@ def export_google_docs(output, folder, exclude, report):
     click.echo(summary)
 
 
+@export_group.command("granola")
+@click.option("--output", "-o", type=click.Path(file_okay=False, path_type=Path), required=True,
+              help="Output directory, dedicated to this export: files of meetings no longer listed or excluded are deleted")
+@click.option("--exclude", multiple=True, help="Note id (not_...) or folder id (fol_...) to skip; repeatable")
+@click.option("--report", type=click.Path(dir_okay=False, path_type=Path), required=True,
+              help="File the run's JSON report is written to")
+def export_granola(output, exclude, report):
+    """Export every Granola meeting note the API key reads, one Markdown file per meeting.
+
+    The key is read only from the GRANOLA_TOKEN environment variable. A
+    workspace key reads the public notes and the spaces open to it; a personal
+    key reads its user's notes. Each file holds the meeting's details, its
+    summary and its transcript; the owner's private notes are left out.
+
+    \b
+    Writes OUTPUT/<note id>.md. A meeting is read again only when Granola's
+    updated time differs from the one in its file; no other state is kept. A
+    meeting no longer listed, deleted or excluded has its file deleted. Only
+    names shaped like a note id are deleted, and nothing is deleted in a run
+    that keeps no meeting.
+
+    \b
+    Examples:
+      GRANOLA_TOKEN=grn_... mdexport export granola -o ./granola --report report.json
+      GRANOLA_TOKEN=grn_... mdexport export granola -o ./granola --report report.json --exclude fol_...
+    """
+    import json
+    import os
+    from mdexport import granola_export, slack_export
+
+    for value in exclude:
+        if not (granola_export.NOTE.fullmatch(value) or granola_export.FOLDER.fullmatch(value)):
+            raise click.ClickException(f"--exclude must be a Granola note or folder id: {value}")
+    token = os.environ.get("GRANOLA_TOKEN")
+    if not token:
+        raise click.ClickException("GRANOLA_TOKEN is not set")
+
+    client = granola_export.make_client(token)
+    try:
+        result = granola_export.export(client, output, exclude=exclude)
+    except granola_export.ExportError as e:
+        raise click.ClickException(str(e)) from e
+    finally:
+        client.close()
+
+    slack_export._write_atomic(report, json.dumps(result, indent=2) + "\n")
+    summary = (f"Exported {result['meetings']} meetings ({result['read']} read, {result['written']} written), "
+               f"{len(result['unreadable'])} unreadable")
+    if result.get("removal_skipped"):
+        summary += "; removal skipped: no meetings kept"
+    click.echo(summary)
+
+
 def _places(place: tuple) -> dict:
     places = {}
     for item in place:
