@@ -636,6 +636,60 @@ def export_granola(output, exclude, report):
     click.echo(summary)
 
 
+@export_group.command("attio")
+@click.option("--output", "-o", type=click.Path(file_okay=False, path_type=Path), required=True,
+              help="Output directory, dedicated to this export: files of records no longer listed or excluded are deleted")
+@click.option("--exclude", multiple=True, help="Object slug (deals), object id or record id to skip; repeatable")
+@click.option("--report", type=click.Path(dir_okay=False, path_type=Path), required=True,
+              help="File the run's JSON report is written to")
+def export_attio(output, exclude, report):
+    """Export every record of every Attio object, one Markdown file per record.
+
+    The token is read only from the ATTIO_TOKEN environment variable, an
+    Attio access token with read scopes for objects, records, notes, tasks
+    and workspace members. Each file holds the record's attributes, its notes
+    and the tasks linked to it.
+
+    \b
+    Writes OUTPUT/<object id>/<record id>.md, a folder per object, rewriting a
+    file only when its text changed; no state is kept. A record no longer
+    listed or excluded has its file deleted, and an object folder is removed
+    once empty. Only names shaped like an Attio id are deleted, and nothing is
+    deleted in a run that keeps no record.
+
+    \b
+    Examples:
+      ATTIO_TOKEN=... mdexport export attio -o ./attio --report report.json
+      ATTIO_TOKEN=... mdexport export attio -o ./attio --report report.json --exclude users --exclude workspaces
+    """
+    import json
+    import os
+    from mdexport import attio_export, slack_export
+
+    values = [value.lower() for value in exclude]
+    for typed, value in zip(exclude, values):
+        if not (attio_export.SLUG.fullmatch(value) or attio_export.UUID.fullmatch(value)):
+            raise click.ClickException(f"--exclude must be an Attio object slug, object id or record id: {typed}")
+    token = os.environ.get("ATTIO_TOKEN")
+    if not token:
+        raise click.ClickException("ATTIO_TOKEN is not set")
+
+    client = attio_export.make_client(token)
+    try:
+        result = attio_export.export(client, output, exclude=values)
+    except attio_export.ExportError as e:
+        raise click.ClickException(str(e)) from e
+    finally:
+        client.close()
+
+    slack_export._write_atomic(report, json.dumps(result, indent=2) + "\n")
+    summary = (f"Exported {result['objects']} objects, {result['records']} records ({result['written']} written), "
+               f"{result['notes']} notes, {result['tasks']} tasks, {len(result['unreadable'])} unreadable")
+    if result.get("removal_skipped"):
+        summary += "; removal skipped: no records kept"
+    click.echo(summary)
+
+
 def _places(place: tuple) -> dict:
     places = {}
     for item in place:

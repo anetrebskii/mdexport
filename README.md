@@ -1,6 +1,6 @@
 # mdexport
 
-Export data from GitHub, Slack, Telegram, Gmail, Linear, Google Docs, Notion, and Granola into local Markdown files.
+Export data from GitHub, Slack, Telegram, Gmail, Linear, Google Docs, Notion, Granola, and Attio into local Markdown files.
 
 mdexport is a CLI tool that pulls content from your tools and saves it as plain Markdown — readable, searchable, version-controllable. Register your sources once, then sync whenever you need fresh data.
 
@@ -348,6 +348,32 @@ Exported 6 meetings (1 read, 1 written), 0 unreadable
 
 `meetings` counts what is kept, `read` the meetings read from Granola this run, `written` the files written, and `removed` the ids of the deleted files. A meeting that cannot be read or rendered is listed under `unreadable` and keeps its earlier file. A run that keeps no meeting adds `"removal_skipped": true` and `; removal skipped: no meetings kept`. If Granola cannot be listed, the command exits 1 with `Granola listing failed: <code>`, writes no report and changes nothing.
 
+### `mdexport export attio` - One-off Attio export
+
+```bash
+ATTIO_TOKEN=... mdexport export attio --output ./attio --report ./attio-report.json
+
+# Skip two objects and one record
+ATTIO_TOKEN=... mdexport export attio -o ./attio --report ./attio-report.json --exclude users --exclude workspaces --exclude <record id>
+```
+
+Options: `--exclude` object slug (`deals`), object id or record id, repeatable, `--report` file for the JSON report (required).
+
+The token is read only from `ATTIO_TOKEN`: an access token made under Workspace settings > Developers, with read access to objects, records, notes, tasks and workspace members. Nothing is read from or written to `~/.mdexport/registry.json`.
+
+Writes `OUTPUT/<object id>/<record id>.md`, a folder per object: a header with the record's name, object, Attio link and creation date, a `##` passage with every attribute that holds a value, as `Title: value; value`, one passage per note on the record, and one with the tasks linked to it, open ones first. Each passage is followed by the record's Attio link. A referenced record is written by its name, and a workspace member by their name. Every record is read on every run and a file is rewritten only when its text changed; no state is kept. **The output directory is dedicated to this export:** a record no longer listed or excluded has its file deleted, and an object folder is removed once empty. Only names shaped like an Attio id are deleted, and nothing is deleted in a run that keeps no record.
+
+```json
+{"objects": 3, "records": 812, "notes": 140, "tasks": 57, "sections": 1004, "written": 9, "removed": [],
+ "unreadable": {}, "removal_skipped": false, "excluded": [], "finished_at": "2026-11-13T03:00:12Z"}
+```
+
+```
+Exported 3 objects, 812 records (9 written), 140 notes, 57 tasks, 0 unreadable
+```
+
+`records` counts what is kept, `notes` and `tasks` those written into kept files, a task once per record it is linked to, `written` the files written, and `removed` the ids of the deleted files. A record that cannot be rendered, or whose id is not shaped like an Attio id, is listed under `unreadable` and keeps its earlier file. A run that keeps no record adds `"removal_skipped": true` and `; removal skipped: no records kept`. If Attio cannot be listed, the command exits 1 with `Attio listing failed: <code>`, writes no report and changes nothing.
+
 ## Authentication
 
 Tokens are loaded from environment variables or a `.env` file. See `.env.example` for all options.
@@ -362,6 +388,7 @@ Tokens are loaded from environment variables or a `.env` file. See `.env.example
 | Google Docs | `GOOGLE_TOKEN` | Service account, gcloud CLI, or [OAuth playground](https://developers.google.com/oauthplayground) |
 | Notion | `NOTION_TOKEN` | [My integrations](https://www.notion.so/my-integrations) → Create integration (`ntn_...`) |
 | Granola | `GRANOLA_TOKEN` | Granola app → Settings → API → Create key (`grn_...`) |
+| Attio | `ATTIO_TOKEN` | Attio → Workspace settings → Developers → New access token, read scopes |
 
 You can also pass tokens directly via `--token` when adding a source.
 
